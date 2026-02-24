@@ -16,8 +16,9 @@ This document isolates Designer-owned corrections to ensure the UI/UX spec stays
    - `/admin/users`, `/admin/settings`: `AGENT_DESIGN_SPEC.md:530-531`, `:605`
    - Architect API contract currently does not define these flows/endpoints.
 
-3. **Flow defines backend side effect not yet specified in Architect**
-   - "Filing status auto-transitions to ACCEPTED": `AGENT_DESIGN_SPEC.md:595`
+3. **Flow must align to fixed side-effect policy**
+   - Product owner decision: assessment actions do not implicitly change filing state.
+   - Designer flows must show filing changes only through filing endpoints.
 
 ### High
 
@@ -47,8 +48,8 @@ This document isolates Designer-owned corrections to ensure the UI/UX spec stays
    If retained, demonstrate exact mapping to mandatory reporting fields and legal form semantics.
 2. **Why are admin pages included now?**  
    Provide dependency and value argument, or explicitly defer with a UX placeholder strategy.
-3. **Why does the flow assert filing auto-transition to `ACCEPTED`?**  
-   This is a backend decision; either reference canonical rules or remove from UX narrative.
+3. **Why does the flow imply filing mutation from assessment actions?**  
+   Product policy is now fixed to no implicit mutation; narrative must match this.
 4. **Why choose English status labels in key operator workflows?**  
    Justify language choice against legal/audit context and user expectations.
 
@@ -67,6 +68,7 @@ This document isolates Designer-owned corrections to ensure the UI/UX spec stays
 2. Add an explicit "Data Contract Alignment" table mapping each page component field to Architect schema fields.
 3. Mark all screens/actions as `In Scope Phase 2` or `Deferred` based on resolved Architect contract.
 4. Replace implied backend behavior statements with references to Architect-defined state rules.
+   - Explicitly enforce no implicit filing mutation from assessment endpoints.
 5. Add a terminology map section (`domain value` -> `display label`) agreed with Architect/Researcher.
 6. Consume the Researcher "SKAT VAT Filing UX Benchmark" and align filing UX patterns:
    - Step order

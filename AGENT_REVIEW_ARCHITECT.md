@@ -15,9 +15,9 @@ This document isolates Architect-owned issues from Reviewer findings so updates 
 2. **API contract does not cover all designed app areas**
    - Contract summary lacks admin-specific API coverage despite designed admin pages: `AGENT_ARCHITECT_SPEC.md:1668-1688` vs `AGENT_DESIGN_SPEC.md:530-531`
 
-3. **Implicit behavior missing: filing status transition on assessment creation**
-   - Designer expects auto-transition to `ACCEPTED`: `AGENT_DESIGN_SPEC.md:595`
-   - Assessment service draft does not define this effect: `AGENT_ARCHITECT_SPEC.md:1193-1201`
+3. **Assessment/filing side effects must match fixed policy**
+   - Product owner decision: assessment actions must not implicitly mutate filing state.
+   - Architect contract must enforce decoupled state machines.
 
 ### High
 
@@ -40,8 +40,7 @@ This document isolates Architect-owned issues from Reviewer findings so updates 
 1. Is Filing in Phase 2 strictly VAT-first, or multi-tax from day one?
 2. What is the canonical Filing payload shape for VAT (fixed fields vs line-items), and why?
 3. Do we support `/admin/users` and `/admin/settings` in this phase? If yes, which endpoints are required?
-4. Should creating an assessment transition filing status? If yes, define exact state table and event flow.
-5. What are explicit row-level access rules per role for parties, filings, and assessments?
+4. What are explicit row-level access rules per role for parties, filings, and assessments?
 
 ## Decision Challenges (justify or revise)
 
@@ -69,7 +68,9 @@ This document isolates Architect-owned issues from Reviewer findings so updates 
 2. Publish a reconciled Filing model section aligned with Researcher must-have legal fields or document a justified alternative and scope deferral.
 3. Update API contract summary with a complete page-to-endpoint mapping (including admin scope decisions).
 4. Add explicit role + ownership rules to each endpoint.
-5. Resolve assessment date typing and state-transition rules.
+5. Resolve assessment date typing and state-transition rules, enforcing:
+   - no implicit filing mutation from assessment endpoints.
+   - filing transitions only via filing endpoints.
 6. Update event payload definitions if Filing schema changes.
 7. Consume the Researcher "SKAT VAT Filing UX Benchmark" and reflect it in:
    - Filing endpoint flow

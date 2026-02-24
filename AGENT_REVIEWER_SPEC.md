@@ -18,6 +18,9 @@ The following product decisions are now fixed unless explicitly changed by the p
 5. Strict access control now (taxpayer data isolation).
 6. Deadlines and penalties enforced now.
 7. Correctness over speed when tradeoffs occur.
+8. Assessment actions must **not** implicitly mutate filing status.
+   - Filing and assessment state machines are decoupled by policy.
+   - Any filing status change must occur through explicit filing endpoints only.
 
 New mandatory direction:
 - Researcher must benchmark the **current SKAT VAT filing style in TastSelv Erhverv** and provide a replication brief (flow, field structure, controls, states, and terminology), based on official sources.
@@ -64,8 +67,8 @@ The three Phase 1 specs are substantial and useful, but they are not yet decisio
    - Architect API contract summary does not define endpoints for these pages: `AGENT_ARCHITECT_SPEC.md:1668-1688`
 
 3. **Workflow mismatch on assessment side effects**  
-   - Designer flow claims filing auto-transitions to `ACCEPTED` after assessment creation: `AGENT_DESIGN_SPEC.md:595`  
-   - Architect assessment service logic does not define this side effect: `AGENT_ARCHITECT_SPEC.md:1193-1201`
+   - Product policy now fixed: no implicit filing mutation from assessment actions.  
+   - Architect and Designer must reflect this exact rule consistently.
 
 ### Flags
 
