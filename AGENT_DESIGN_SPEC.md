@@ -119,7 +119,7 @@ States: default, hover, focus, disabled, loading
 Canonical backend values with English primary labels and Danish legal aliases:
 - `DRAFT` -> Draft (`Kladde`)
 - `SUBMITTED_WITH_RECEIPT` -> Submitted with Receipt (`Indberettet med kvittering`)
-- `UNDER_REVIEW` -> Under Review (`Under behandling`)
+- `UNDER_REVIEW` -> Under Review (`Under behandling`) [reserved/deferred in Phase 2]
 - `ACCEPTED` -> Accepted (`Godkendt`)
 - `REJECTED` -> Rejected (`Afvist`)
 - `CORRECTED` -> Corrected (`Korrigeret`)
@@ -384,8 +384,6 @@ English-first labels:
 | Update admin setting | `PATCH /api/v1/admin/settings/{key}` | admin setting patch payload | `AdminSettingRead` | A | In Scope Phase 2 |
 
 Deferred actions:
-- Dedicated receipt retrieval endpoint action (`GET /api/v1/filings/{id}/receipt`) is not in architect contract
-- Dedicated deadline calculator endpoint action (`GET /api/v1/vat-deadlines`) is not in architect contract
 - Manual line-item-first filing editor (non-canonical by decision)
 
 ---
@@ -465,7 +463,7 @@ Deferred actions:
 | Assessment appeal | In Scope Phase 2 | `POST /assessments/{id}/appeal` exists |
 | Admin users | In Scope Phase 2 | `GET/POST/PATCH /api/v1/admin/users...` exists |
 | Admin settings | In Scope Phase 2 | `GET/PATCH /api/v1/admin/settings...` exists |
-| Dedicated receipt retrieval view | Deferred | no receipt endpoint in architect contract |
+| Dedicated receipt retrieval view | Deferred | receipt is already shown on filing detail; separate page is deferred |
 | Manual line-item editor | Deferred | non-canonical by 4C decision |
 
 ---
@@ -492,6 +490,7 @@ Failure handling:
 - `POST /assessments`: filing `NO_CHANGE`, assessment `NONE -> PENDING`
 - `PATCH /assessments/{id}/status`: filing `NO_CHANGE`, assessment `PENDING -> COMPLETE` or `COMPLETE -> APPEALED`
 - `POST /assessments/{id}/appeal`: filing `NO_CHANGE`, assessment `COMPLETE -> APPEALED`
+- `UNDER_REVIEW` is reserved/deferred in Phase 2 and is not used in active transition paths.
 
 Assessment actions must not implicitly mutate filing state.  
 Filing state transitions occur only through explicit filing endpoints.
@@ -526,7 +525,7 @@ Filing state transitions occur only through explicit filing endpoints.
 |---|---|
 | `DRAFT` | Draft (`Kladde`) |
 | `SUBMITTED_WITH_RECEIPT` | Submitted with Receipt (`Indberettet med kvittering`) |
-| `UNDER_REVIEW` | Under Review (`Under behandling`) |
+| `UNDER_REVIEW` | Under Review (`Under behandling`) [reserved/deferred in Phase 2] |
 | `ACCEPTED` | Accepted (`Godkendt`) |
 | `REJECTED` | Rejected (`Afvist`) |
 | `CORRECTED` | Corrected (`Korrigeret`) |
@@ -623,3 +622,10 @@ Notes:
 - Removed all assessment flow statements that implied filing-state mutation.
 - Aligned filing status terminology to canonical `SUBMITTED_WITH_RECEIPT` (replacing legacy `SUBMITTED` where it represented filing domain state).
 - Updated SSOT/state and terminology sections to enforce: only filing endpoints mutate filing state.
+
+## 17. Micro-fix Delta
+
+- Removed stale deferred lines: `Dedicated receipt retrieval endpoint action (GET /api/v1/filings/{id}/receipt) is not in architect contract` and `Dedicated deadline calculator endpoint action (GET /api/v1/vat-deadlines) is not in architect contract`.
+- Corrected deferred scope line to: `Dedicated receipt retrieval view | Deferred | receipt is already shown on filing detail; separate page is deferred`.
+- Added reserved-phase wording for `UNDER_REVIEW` in both status mapping lines: `UNDER_REVIEW -> Under Review (Under behandling) [reserved/deferred in Phase 2]`.
+- Added SSOT line: `UNDER_REVIEW is reserved/deferred in Phase 2 and is not used in active transition paths.`
