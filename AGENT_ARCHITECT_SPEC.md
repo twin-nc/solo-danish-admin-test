@@ -713,7 +713,9 @@ The following table is the only valid state machine for Filing + Assessment side
 | `POST /api/v1/assessments` | Filing is `SUBMITTED_WITH_RECEIPT` | `NO_CHANGE` | `NONE -> PENDING` | Publish assessment events only; filing status is not implicitly mutated |
 | `PATCH /api/v1/assessments/{id}/status` | Assessment is `PENDING` or `COMPLETE` | `NO_CHANGE` | `PENDING -> COMPLETE` or `COMPLETE -> APPEALED` | Persist decision outcome, surcharge, interest, and deadlines |
 | `POST /api/v1/assessments/{id}/appeal` | Assessment is `COMPLETE`, caller owns filing | `NO_CHANGE` | `COMPLETE -> APPEALED` | Set `appealed_at`; enforce 3-month appeal deadline |
-| `POST /api/v1/filings/{id}/correct` | Filing is `SUBMITTED_WITH_RECEIPT`/`ACCEPTED`/`REJECTED` | previous version -> `CORRECTED`; new version `DRAFT` | `NONE` | Increment filing `version`, link `original_filing_id` |
+| `POST /api/v1/filings/{id}/correct` | Filing status in `{SUBMITTED_WITH_RECEIPT, ACCEPTED, REJECTED}` | previous version -> `CORRECTED`; new version `DRAFT` | `NONE` | Increment filing `version`, link `original_filing_id` |
+
+State policy note: Filing and Assessment are decoupled state machines. Assessment endpoints (`/api/v1/assessments*`) MUST keep filing transition as `NO_CHANGE`; filing status transitions are allowed only through explicit filing endpoints.
 
 ### 3.1.2 Researcher/Designer Alignment Notes (Pass 2)
 
@@ -802,6 +804,8 @@ class Filing(Base, TimestampMixin):
 | `afregningsperiode_type` | `MONTHLY`, `QUARTERLY`, `SEMI_ANNUAL` |
 | `filing_period` | `YYYY-MM` (monthly), `YYYY-QN` (quarterly), `YYYY-HN` (semi-annual) |
 | `submission_outcome` | `PAYABLE`, `REFUNDABLE`, `NIL` (computed at submission) |
+
+`UNDER_REVIEW`, `ACCEPTED`, and `REJECTED` are filing-domain statuses and are never set by assessment endpoints.
 
 ### 3.3 Pydantic Schemas
 
@@ -1140,7 +1144,10 @@ class FilingService:
     async def correct_filing(self, filing_id: uuid.UUID, payload: FilingCreate, current_user, db: Session) -> Filing:
         original = await self.get_filing(filing_id, current_user, db)
         if original.status not in {"SUBMITTED_WITH_RECEIPT", "ACCEPTED", "REJECTED"}:
-            raise HTTPException(status_code=400, detail="Only submitted/resolved filings can be corrected")
+            raise HTTPException(
+                status_code=400,
+                detail="Only filings in SUBMITTED_WITH_RECEIPT, ACCEPTED, or REJECTED can be corrected",
+            )
         payload.angivelse_type = original.angivelse_type
         payload.party_id = original.party_id
         payload.se_nummer = original.se_nummer
@@ -2307,6 +2314,7 @@ Role legend: `A=ADMIN`, `O=OFFICER`, `T=TAXPAYER`
 | Admin users page load/manage | `GET/POST/PATCH /api/v1/admin/users...` | A only | 401,403,404,409,422 |
 | Admin settings page load/update | `GET/PATCH /api/v1/admin/settings...` | A only | 401,403,404,422 |
 | Assessment create/update side-effect policy | `POST /api/v1/assessments`, `PATCH /api/v1/assessments/{id}/status` | A,O | Filing state is unchanged unless a dedicated filing endpoint is called |
+| Assessment appeal side-effect policy | `POST /api/v1/assessments/{id}/appeal` | T-own | Filing state is unchanged unless a dedicated filing endpoint is called |
 
 ### 8.4 Intentional Deviations from SKAT Benchmark
 
@@ -2574,6 +2582,13 @@ export interface ValidationError {
 
 - None blocking for Architect scope.
 - Cross-agent follow-up: Designer `Data Contract Alignment Table` still references legacy `filing_type/line_items/penalties` transport fields and should be updated to canonical fields + transitional adapter note.
+
+## Pass-3 delta (state-policy alignment)
+
+- Normalized correction precondition wording to canonical status-set notation and removed slash-alias style.
+- Added explicit state-policy note that assessment endpoints must keep filing transition as `NO_CHANGE`.
+- Clarified filing-status ownership: `UNDER_REVIEW`, `ACCEPTED`, and `REJECTED` are filing-domain statuses only.
+- Added explicit API parity row confirming assessment appeal also has no implicit filing mutation.
 
 
 
