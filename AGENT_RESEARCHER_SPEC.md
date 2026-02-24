@@ -1,502 +1,200 @@
-# Danish Tax Administration Platform — Researcher Agent Report
+# Danish Tax Administration Platform - Researcher Spec (Revised)
 
-**Document:** AGENT_RESEARCHER_SPEC.md
-**Date:** 2026-02-24
-**Author:** Researcher Agent
-**Status:** Phase 1 deliverable — input to all Coder agents
+**Document:** AGENT_RESEARCHER_SPEC.md  
+**Date:** 2026-02-24  
+**Author:** Researcher Agent  
+**Status:** Review Round 1 update for Architect/Designer unblock
 
----
+## 0) Fixed Decisions (Locked)
 
-## Executive Summary
+- Legal accuracy first.
+- UI language mostly English (Danish legal terms preserved where required).
+- Admin pages are in scope now.
+- Filing decision is 4C: Phase 2 uses fixed official VAT fields as canonical model; optional line-item detail can be added later as non-canonical convenience.
+- Strict access control now.
+- Deadlines and penalties enforced now.
+- Correctness over speed.
 
-This report provides a comprehensive research foundation for building a Danish Tax Administration Platform that authentically models Danish VAT (moms) administration. It covers the legal framework of Danish VAT law (momslov), Danish business registration procedures (CVR/SE numbers, Erhvervsstyrelsen), SKAT's digital systems including TastSelv Erhverv, the end-to-end procedural flow from business formation to VAT payment, and the specific data fields required in a Danish momsangivelse (VAT return).
+## 1) Claim-Level Evidence Map
 
-Following the research, a gap analysis of `AGENT_ARCHITECT_SPEC.md` identifies significant structural deficiencies: the Filing module's data model does not capture any of the mandatory Rubrik A–E fields from a real momsangivelse; the Party/Registration module lacks CVR number, SE number, and VAT registration date fields; filing period validation does not enforce Danish deadline rules; and the generic `filing_type = "VAT"` terminology does not map to Danish tax concepts such as momsangivelse, aconto, or afregningsperiode.
+| claim_id | rule | source URL / title | legal section | effective date | confidence |
+|---|---|---|---|---|---|
+| C01 | VAT registration is mandatory above DKK 50,000 turnover; below is optional. | https://skat.dk/erhverv/moms/moms-saadan-goer-du/saadan-registrerer-du-din-virksomhed-for-moms ("S�dan registrerer du din virksomhed for moms") | Momsloven � 48 (registration threshold) | Source retrieved 2026-02-24; law basis: LBK 209 of 2024-02-27 (g�ldende) | high |
+| C02 | VAT filing period assignment thresholds are monthly (>50m), quarterly (5m-50m), semi-annual (<=5m), with legal deadline formulas. | https://www.retsinformation.dk/api/pdf/241297 ("Bekendtg�relse af lov om merv�rdiafgift") | Momsloven � 57 stk. 2-4 | LBK 209 of 2024-02-27 (g�ldende; later changes listed through 2025-12-29) | high |
+| C03 | Filing/payment calendar dates for 2026/27 are published by SKAT and should be used by default in UX reminders. | https://skat.dk/erhverv/moms/frister-indberet-og-betal-moms ("Frister for moms") | Operational guidance (implements � 57 and payment rules) | Source retrieved 2026-02-24 | high |
+| C04 | Filing is required even with no turnover (zero filing). | https://skat.dk/erhverv/moms/moms-saadan-goer-du/saadan-indberetter-du-moms ("S�dan indberetter du moms") and https://skat.dk/erhverv/moms/moms-saadan-goer-du/saadan-registrerer-du-din-virksomhed-for-moms | Operational guidance | Source retrieved 2026-02-24 | high |
+| C05 | Missing a filing deadline triggers provisional assessment fee shown publicly as DKK 1,400 per period. | https://skat.dk/erhverv/moms/tjek-paa-momsen ("Tjek p� momsen") and https://skat.dk/erhverv/moms/frister-indberet-og-betal-moms | Operational guidance | Source retrieved 2026-02-24 | medium |
+| C06 | Provisional assessment fee exists in law; amount is currently codified in opkr�vningsloven and has changed over time. Treat fee amount as policy-configurable. | https://www.retsinformation.dk/api/pdf/244881 ("Bekendtg�relse af lov om opkr�vning af skatter og afgifter m.v.") | Opkr�vningsloven � 4 stk. 2 | LBK 1040 of 2024-09-13 (g�ldende; later changes listed through 2025-12-29) | high |
+| C07 | Late payment interest is variable (base rate + 0.7 percentage points), computed daily; skattekonto saldo interest accrues daily and is posted monthly. | https://www.retsinformation.dk/api/pdf/244881 | Opkr�vningsloven � 7 stk. 1-2 and � 16 c stk. 1 | LBK 1040 of 2024-09-13 | high |
+| C08 | Tax/fee amounts cannot be safely hardcoded long term; rates are republished yearly and tied to reference rates. | https://www.retsinformation.dk/api/pdf/244881 | Opkr�vningsloven � 7 stk. 2 | LBK 1040 of 2024-09-13 | high |
+| C09 | Ordinary VAT reassessment/change window is 3 years from filing deadline; extraordinary reopening is possible under defined conditions. | https://www.retsinformation.dk/eli/lta/2025/1228/pdf ("Bekendtg�relse af skatteforvaltningsloven") | Skatteforvaltningsloven � 31 stk. 1-2 and � 32 stk. 1 | LBK 1228 of 2025-10-13 | high |
+| C10 | Correction workflow is explicitly supported in TastSelv; >3 years requires documented exceptional grounds. | https://skat.dk/erhverv/moms/moms-saadan-goer-du/saadan-retter-du-din-momsindberetning-eller-betaling | Operational guidance aligned with SFL � 31-32 | Source retrieved 2026-02-24 | high |
+| C11 | Filing and payment deadline are the same for a period; payment can be made earliest 5 days before deadline in normal flow. | https://skat.dk/erhverv/moms/moms-saadan-goer-du/saadan-betaler-du-moms | Operational guidance | Source retrieved 2026-02-24 | high |
+| C12 | Submission flow includes explicit confirmation/receipt state (kvitteringsbillede) and historical receipts can be retrieved. | https://skat.dk/erhverv/moms/moms-saadan-goer-du/saadan-indberetter-du-moms and https://skat.dk/erhverv/moms/moms-saadan-goer-du/saadan-betaler-du-moms | Operational guidance | Source retrieved 2026-02-24 | high |
+| C13 | Validation cues visible in public guidance: required fields marked with red star, inline help via blue question marks, explicit draft save before final approval. | https://skat.dk/erhverv/moms/moms-saadan-goer-du/saadan-indberetter-du-moms | Operational guidance | Source retrieved 2026-02-24 | high |
+| C14 | Refund outcome is explicit: amount appears on skattekonto and is normally paid to NemKonto within 21 days after filing. | https://skat.dk/erhverv/moms/moms-saadan-goer-du/saadan-betaler-du-moms | Operational guidance | Source retrieved 2026-02-24 | high |
+| C15 | Authentication/authorization is role/delegation-based (MitID Erhverv + explicit rights/delegations in TastSelv context). | https://skat.dk/erhverv/moms/moms-saadan-goer-du/saadan-indberetter-du-moms | Operational guidance | Source retrieved 2026-02-24 | medium |
+| C16 | Public official forms confirm fixed-field rubric style (not free-form line items): salgsmoms/k�bsmoms and rubrik A/B/C family. | https://skat.dk/media/t4nhivvs/31012_juni_2024-t.pdf ("31.012 Angivelse, lejlighedsvis registrering") | Form-level official structure, references momsbekendtg�relsen | Form version 2024.06 | medium |
+| C17 | Payment processing on skattekonto follows oldest-debt-first behavior. | https://www.retsinformation.dk/api/pdf/244881 and https://skat.dk/erhverv/moms/tjek-paa-momsen | Opkr�vningsloven � 16 b / � 16 c context + operational guidance | Source retrieved 2026-02-24 | high |
+| C18 | If filing date falls on bank closing day, next bank day applies. | https://www.retsinformation.dk/api/pdf/244881 | Opkr�vningsloven � 2 stk. 3 | LBK 1040 of 2024-09-13 | high |
 
-The recommendations section provides specific, actionable changes to data models, API contracts, and business logic, prioritised by impact.
+## 2) SKAT VAT Filing UX Benchmark (Public, Official)
 
----
+### 2.1 End-to-End Filing Journey (Observed)
 
-## 1. Danish VAT (Moms) Legal Framework
+| step | public observation from official sources | evidence |
+|---|---|---|
+| 1 | Business is VAT-registered via virk.dk / Erhvervsstyrelsen path, then files in TastSelv Erhverv. | C01 |
+| 2 | In TastSelv flow: `Moms -> Momsindberetning -> Indberet moms -> choose period -> fill fields -> Godkend`. | C12 |
+| 3 | Required fields use visible required marker (`*`), with inline helper cues (`?`). | C13 |
+| 4 | User may save draft (`kladde`) and complete later; draft is not a submission. | C13 |
+| 5 | On submit, a receipt/confirmation screen is shown with pay/receive outcome; receipt history is accessible later. | C12 |
+| 6 | If amount is payable: pay to skattekonto using payment line; if credit: normal NemKonto payout in <=21 days. | C14 |
+| 7 | Corrections are supported as a distinct path, with stricter handling after 3 years. | C10 |
 
-### 1.1 Statutory Basis
+### 2.2 Field Model and Interaction Style
 
-Danish VAT is governed by **Momsloven** (Lovbekendtgørelse nr. 1021 af 26. september 2019, as amended). The administering authority is **Skattestyrelsen** (commonly referred to as SKAT, a part of the umbrella organisation Skatteforvaltningen). The law implements EU Council Directive 2006/112/EC on the common system of VAT.
+| area | benchmark finding | implication for Phase 2 |
+|---|---|---|
+| Canonical input style | Official filings use fixed VAT fields/rubriks, not free-form line-item narratives. | Canonical DB/API model must be fixed-field (4C decision), line-items only as optional derived convenience layer later. |
+| Minimum publicly verifiable fields | `salgsmoms` and `kobsmoms` are explicitly central in current public guidance; official form evidence also exposes rubrik A/B/C style fields. | Phase 2 canonical payload must include fixed fields for sales VAT, purchase VAT, and EU/zero-rate rubric group fields supported by current official documentation. |
+| Required-mark behavior | Required fields are explicitly marked and validated before approval. | UI must show required marker and block final submission when mandatory fields are absent. |
+| Help behavior | Inline helper cues exist in flow. | Add inline field hints and legal context tooltips for each fixed field. |
+| Confirmation | Explicit kvittering state with payment/refund implications. | Persist immutable `receipt_id`, `submitted_at`, and `submission_outcome` in backend. |
+| Correction state | Correction path is first-class and time-window dependent. | Implement correction workflow with policy checks (`<=3y`, `>3y exceptional`). |
 
-### 1.2 VAT Rates
+### 2.3 Validation / Error Cues (Publicly Verifiable)
 
-| Category | Rate | Danish Term | Examples |
+- Required field markers and helper cues are visible in official step guide (C13).
+- Zero filing is explicitly guided and auto-zero behavior is described for no-activity periods (C04).
+- Missing filing leads to provisional assessment path and fee exposure (C05/C06).
+- Payment sequence constraints and debt allocation behavior are explicit (C11/C17).
+
+### 2.4 Submission Outcomes and Post-Submission States
+
+- `DRAFT` (saved but not submitted) (C13)
+- `SUBMITTED_WITH_RECEIPT` (kvittering issued) (C12)
+- `PAYABLE` / `REFUNDABLE` as outcome branch on receipt (C14)
+- `CORRECTION_REQUESTED` / `CORRECTION_ACCEPTED` / `CORRECTION_REJECTED` based on timing and grounds (C10)
+
+### 2.5 What Is Public vs Login-Gated
+
+Publicly confirmed:
+- High-level sequence, required-marker behavior, draft/approve pattern, receipt/retrieval, correction gates, deadlines, and payment/refund outcomes.
+
+Not fully public without active login and profile-specific context:
+- Exact authenticated screen layout by taxpayer type.
+- Full current set of all rubric labels/ordering for every company profile.
+- Exact in-session validation message catalog and code-level error taxonomy.
+
+## 3) MVP Legal Baseline (Phase Discipline)
+
+| bucket | item | why | evidence |
 |---|---|---|---|
-| Standard rate | **25%** | Normalsatsen | Most goods and services |
-| Zero-rated | **0%** | Nulsats | Newspapers (dagblade), EU exports |
-| Exempt (no VAT charged, no input VAT recovery) | **0%** | Momsfritaget | Medical services, insurance, financial services, passenger transport, education |
+| Required now | Fixed canonical VAT filing fields (no free-form line-item-only filing). | 4C decision + official fixed-field pattern. | C16 |
+| Required now | Enforce filing frequency + deadlines by party profile and period. | Statutory compliance. | C02, C03, C18 |
+| Required now | Require submission even for zero activity period. | Explicit obligation in guidance. | C04 |
+| Required now | Enforce strict taxpayer-data isolation and delegated access checks at API layer. | Product decision + official delegation pattern. | C15 |
+| Required now | Persist receipt state and expose retrieval. | Official submission outcome behavior. | C12 |
+| Required now | Enforce late behavior: provisional assessment trigger and interest/fee policy hooks. | Compliance and product decision. | C05, C06, C07 |
+| Required now | Keep monetary sanctions/rates configurable (not hardcoded). | Legal rates/fees can change. | C06, C08 |
+| Recommended now | Include explicit correction workflow statuses and >3y exceptional-grounds path. | Avoid legal ambiguity in amendments. | C09, C10 |
+| Recommended now | Add reminder/calendar UX using published date tables. | Reduce filing defects; aligns with SKAT behavior. | C03 |
+| Recommended now | Add validation hint text per fixed field. | Matches public SKAT interaction cues. | C13 |
+| Defer | Non-canonical line-item convenience layer and bookkeeping import drill-downs. | Not required for legal sufficiency in Phase 2. | 4C decision |
+| Defer | High-fidelity visual mimicry of protected SKAT branding/assets. | Not required; legal and UX parity does not require asset copying. | replication policy |
+| Defer | Full parity with every profile-specific authenticated screen variation. | Login-gated and not fully publicly verifiable. | uncertainty section |
 
-Denmark has no reduced rate unlike many EU member states. The only practical distinction is 25% versus 0%/exempt. The system does not need a multi-rate VAT calculation engine for domestic sales, but must handle zero-rated exports and EU intra-community supplies.
+## 4) Architect Unblock Package (Phase 2 Mandatory Only)
 
-### 1.3 VAT Registration Threshold
+### 4.1 Mandatory Canonical Model Fields
 
-- **Threshold:** DKK 50,000 annual turnover (omsætning) from taxable supplies
-- Any business whose taxable turnover exceeds or is expected to exceed DKK 50,000 in a 12-month period **must** register for VAT before commencing taxable activity (Momsloven § 47)
-- Voluntary registration is possible for businesses below the threshold (e.g. to recover input VAT on startup costs)
-- Non-resident businesses supplying digital services to Danish consumers must register (no threshold for B2C digital services under the EU OSS regime)
+`Party` (minimum)
+- `party_id` (UUID)
+- `cvr_number` (string, 8 digits)
+- `se_number` (string, 8 digits)
+- `vat_period_type` (`MONTHLY | QUARTERLY | SEMI_ANNUAL`)
+- `vat_registration_active` (bool)
 
-### 1.4 Filing Periods (Afregningsperiode)
+`VatFiling` (minimum)
+- `filing_id` (UUID)
+- `party_id` (FK)
+- `se_number` (string)
+- `period_key` (string; `YYYY-MM` or `YYYY-Qn` or `YYYY-Hn`)
+- `period_type` (`MONTHLY | QUARTERLY | SEMI_ANNUAL`)
+- `sales_vat_amount` (decimal)  # salgsmoms
+- `purchase_vat_amount` (decimal)  # kobsmoms
+- `eu_purchase_goods_value` (decimal, rubric A goods)
+- `eu_purchase_services_value` (decimal, rubric A services)
+- `eu_sales_goods_value` (decimal, rubric B goods)
+- `eu_sales_services_value` (decimal, rubric B services)
+- `other_out_of_scope_value` (decimal, rubric C style)
+- `net_vat_amount` (decimal, computed)
+- `status` (`DRAFT | SUBMITTED | CORRECTION_PENDING | CORRECTION_ACCEPTED | CORRECTION_REJECTED`)
+- `submitted_at` (datetime, nullable)
+- `receipt_id` (string, nullable)
+- `corrected_from_filing_id` (UUID, nullable)
 
-SKAT assigns a filing frequency based on the previous year's VAT-liable turnover:
+Notes:
+- This is intentionally minimal and strictly sourced from publicly verifiable official guidance/forms.
+- Additional rubric variants (if any in logged-in profile views) must be additive and backward compatible.
 
-| Period | Danish Term | Turnover Trigger | Filing Period |
+### 4.2 Mandatory Validation and Policy Rules
+
+- One canonical filing per `(se_number, period_key)` unless filed as correction.
+- `period_key` must match `vat_period_type`.
+- Deadline check must be deterministic using legal period rules + bank-day handling.
+- Zero filing must be accepted and must still create receipt state when submitted.
+- `net_vat_amount` must be computed server-side from canonical fields (no client trust).
+- Fee/interest parameters must be pulled from configurable policy store (`late_filing_fee_amount`, `late_interest_formula`, `effective_from`).
+- Access control:
+  - taxpayer users can only access filings for owned/authorized `party_id`/`se_number`
+  - delegated users need explicit granted rights
+  - admin roles require explicit audit logging for read/write access
+
+### 4.3 Mandatory Endpoint Constraints (API Contract Minimum)
+
+- `POST /api/v1/vat-filings` (create draft; ownership check)
+- `POST /api/v1/vat-filings/{id}/submit` (deadline + required-field validation + receipt issuance)
+- `POST /api/v1/vat-filings/{id}/correct` (time-window and grounds validation)
+- `GET /api/v1/vat-filings?party_id=&period=` (scoped listing)
+- `GET /api/v1/vat-filings/{id}/receipt` (receipt retrieval)
+- `GET /api/v1/vat-deadlines?party_id=&period=` (deterministic deadline computation)
+
+## 5) Decision Defense Package
+
+| decision challenge | selected approach | rejected alternative(s) | rationale / tradeoff |
 |---|---|---|---|
-| Monthly | Månedlig | Turnover > DKK 50 million | Calendar month |
-| Quarterly | Kvartalsvis | Turnover DKK 5–50 million | Calendar quarter (Q1=Jan–Mar, Q2=Apr–Jun, Q3=Jul–Sep, Q4=Oct–Dec) |
-| Semi-annual | Halvårlig | Turnover < DKK 5 million | H1=Jan–Jun, H2=Jul–Dec |
-
-New registrants are typically assigned quarterly or semi-annual depending on projected turnover.
-
-### 1.5 Filing Deadlines (Angivelsesfrist)
-
-| Period type | Period end | Deadline |
-|---|---|---|
-| Monthly | End of month M | 25th of month M+1 |
-| Quarterly | End of quarter (Mar/Jun/Sep/Dec) | 10th of the second month after quarter end (e.g. Q1 = 10 May) |
-| Semi-annual H1 | 30 June | 1 September |
-| Semi-annual H2 | 31 December | 1 March (following year) |
-
-If the deadline falls on a weekend or public holiday, it extends to the next working day.
-
-### 1.6 Penalties for Late or Incorrect Filing
-
-| Violation | Penalty |
-|---|---|
-| Late filing (for aflevering af momsangivelse) | DKK 65 per day, maximum DKK 1,000 per return (dagbod) |
-| Late payment of VAT due | Interest: SKAT's official interest rate + 0.7% per month on outstanding balance, compounded monthly |
-| Voluntary correction within 3 years | No penalty if proactive disclosure |
-| Negligent incorrect return (uagtsomt fejl) | Tillæg (surcharge) of up to 10% of unpaid VAT |
-| Intentional fraud (forsæt) | Criminal prosecution; fines up to 3x the unpaid tax |
-
-### 1.7 Correction of Filed Returns
-
-Businesses may correct a submitted momsangivelse within **3 years** of the filing deadline (Skatteforvaltningsloven § 31). SKAT may reassess within **3 years** for normal errors and **10 years** in cases of fraud.
-
----
-
-## 2. Danish Business Registration
-
-### 2.1 CVR Number (Det Centrale Virksomhedsregister)
-
-The **CVR number** is the central business registration number in Denmark.
-
-- **Format:** 8 digits (e.g. `12345678`)
-- **Issuing authority:** Erhvervsstyrelsen (Danish Business Authority), operating cvr.dk
-- **Modulus check:** CVR numbers pass a modulus-11 check digit (weights: 2,7,6,5,4,3,2,1)
-- **Public registry:** All CVR numbers and company data are publicly accessible at `virk.dk`
-- **Linkage to SKAT:** Skattestyrelsen uses CVR as the primary business tax identifier
-
-### 2.2 SE Number (SE-nummer)
-
-The **SE number** is a separate 8-digit number issued by Skattestyrelsen for tax and VAT purposes.
-
-- A business can have **one CVR** but **multiple SE numbers** if it operates different activities with separate VAT accounts
-- For most SMEs, the SE number is identical to the CVR number
-- The SE number is the identifier on a **momsangivelse** and on bank payment references (FI-kode)
-- Large groups may have a single CVR with multiple SE numbers for different subsidiaries
-
-**Key distinction:**
-- `CVR` = business identity (from Erhvervsstyrelsen)
-- `SE` = tax account identity (from Skattestyrelsen), tied to a specific VAT obligation
-
-### 2.3 Business Entity Types
-
-| Danish Name | Abbreviation | English Equivalent |
-|---|---|---|
-| Aktieselskab | A/S | Public limited company |
-| Anpartsselskab | ApS | Private limited company |
-| Enkeltmandsvirksomhed | ENK | Sole trader |
-| Interessentskab | I/S | General partnership |
-| Kommanditselskab | K/S | Limited partnership |
-| Filial af udenlandsk selskab | FILIAL | Branch of foreign company |
-
-### 2.4 Registration Process
-
-1. **Erhvervsstyrelsen registration (via virk.dk):**
-   - Submit stiftelsesdokument (articles of association)
-   - Pay registration fee (DKK ~670 for ApS online)
-   - CVR number assigned within 1–5 business days
-
-2. **SKAT VAT registration (via virk.dk → TastSelv Erhverv):**
-   - Complete "Registrering af virksomhed" (Form 40.112 or digital equivalent)
-   - Declare: expected turnover, activity type (DB07/NACE code), start date
-   - SKAT assigns SE number and afregningsperiode (filing frequency)
-   - SKAT sends velkomstbrev confirming SE number and first filing deadline
-
-3. **Ongoing obligations:**
-   - File momsangivelse each period via TastSelv Erhverv
-   - Pay VAT due by deadline (bank transfer with FI-kode referencing SE number)
-   - Notify SKAT within 8 days of changes to turnover, activity, or cessation
-
-### 2.5 Industry Classification
-
-Businesses must declare their primary activity using **DB07** (Dansk Branchekode 2007), Denmark's implementation of EU NACE Rev. 2. SKAT uses this to risk-profile businesses for audit and apply sector-specific VAT rules.
-
----
-
-## 3. SKAT Digital Systems
-
-### 3.1 TastSelv Erhverv
-
-**TastSelv Erhverv** is SKAT's online self-service portal for businesses. Primary channel for:
-
-- Filing momsangivelser (VAT returns)
-- Filing lønsumsafgift (payroll tax returns)
-- Filing A-skat and AM-bidrag
-- Viewing account balances and payment history
-- Receiving SKAT communications (digital post via e-Boks)
-- Changing registration details
-- Applying for refunds
-
-**Authentication:** MitID Erhverv (successor to NemID Erhverv from 2022). Delegation via "fuldmagt" allows accountants/employees to access on behalf of the company.
-
-### 3.2 Digital VAT Return Submission
-
-When filing a momsangivelse via TastSelv Erhverv, the following fields are entered:
-
-| Rubrik | Field Name (DK) | Field Name (EN) |
-|---|---|---|
-| A | Salgsmoms (udgående moms) | Output VAT on domestic sales |
-| B | Købsmoms (indgående moms) | Input VAT on domestic purchases |
-| C | EU-varekøb (erhvervelsesmoms) | VAT on EU goods acquisitions |
-| D | EU-varesalg (listesystem) | EU intra-community goods/services sales (zero-rated) |
-| E | Importmoms | Import VAT (from customs declarations) |
-
-Additional fields:
-- **Omsætning:** Total sales value for the period
-- **Momspligtig omsætning:** Taxable turnover (sales subject to VAT at 25%)
-- **Momsfri omsætning:** VAT-exempt sales
-- **Eksport:** Value of zero-rated exports outside the EU
-
-**Calculated field (derived, not entered):**
-- `Momstilsvar` = Rubrik A + Rubrik C + Rubrik E − Rubrik B
-  - Positive: business owes SKAT
-  - Negative: SKAT owes business a refund (tilbagebetaling)
-
-### 3.3 E-indberetning API
-
-Large businesses and accountancy firms use SKAT's **E-indberetning API** (or Skattedata API) to submit returns programmatically. Requires an OCES certificate (virksomhedscertifikat). Data format is XML-based, mapping to the same Rubrik fields.
-
----
-
-## 4. End-to-End Procedural Flow
-
-```
-STEP 1: Business Formation
-  └─ Founders file at Erhvervsstyrelsen (via virk.dk)
-  └─ CVR number assigned (8-digit)
-
-STEP 2: VAT Registration with SKAT
-  └─ Login to TastSelv Erhverv with MitID Erhverv
-  └─ Complete registration: activity (DB07 code), expected turnover, start date
-  └─ SKAT assigns SE number (usually = CVR for single-entity businesses)
-  └─ SKAT assigns afregningsperiode (monthly / quarterly / semi-annual)
-  └─ SKAT sends velkomstbrev confirming SE number and first filing deadline
-
-STEP 3: Ongoing Business Operations (per period)
-  └─ Business issues VAT invoices to customers (must include SE/CVR number)
-  └─ Bookkeeping system accumulates:
-      ├─ Salgsmoms (Rubrik A): VAT charged on sales
-      ├─ Købsmoms (Rubrik B): VAT paid on purchases (deductible)
-      ├─ EU-varekøb (Rubrik C): acquisition VAT on EU goods
-      ├─ EU-varesalg (Rubrik D): value of intra-community supplies
-      └─ Importmoms (Rubrik E): VAT from customs on imports
-
-STEP 4: Momsangivelse Preparation
-  └─ Aggregate all Rubrik A–E figures
-  └─ Calculate Momstilsvar = A + C + E − B
-  └─ Prepare Listesystem data if EU supplies (Rubrik D > 0)
-
-STEP 5: Digital Submission via TastSelv Erhverv
-  └─ Navigate to "Moms" → "Ny momsangivelse"
-  └─ Select SE number and filing period
-  └─ Enter Rubrik A, B, C, D, E values
-  └─ Review calculated Momstilsvar
-  └─ Submit (kvittere)
-  └─ Receive kvitteringsnummer (confirmation number) and PDF kvittering
-
-STEP 6: Payment or Refund
-  └─ If Momstilsvar > 0 (VAT due):
-      └─ Pay via bank transfer (FI-kode 73) by filing deadline
-      └─ Payment reference: SE number + period code
-  └─ If Momstilsvar < 0 (refund due):
-      └─ SKAT transfers refund to NemKonto within ~5 business days
-
-STEP 7: SKAT Review and Assessment
-  └─ SKAT risk-profiles submitted returns (automated + officer review)
-  └─ If discrepancy detected:
-      ├─ SKAT contacts business (digital post to e-Boks)
-      ├─ Business provides documentation (bilag)
-      └─ SKAT issues "Agterskrivelse" (proposed assessment) before final decision
-  └─ If accepted: no further action
-  └─ If assessment raised: "Afgørelse" (formal decision) issued
-      ├─ Business may appeal (klage) to Skatteankestyrelsen within 3 months
-      └─ Further appeal to Landsskatteretten or courts
-
-STEP 8: Audit and Enforcement
-  └─ SKAT may conduct momseftersyn (VAT audit) — on-site or desk review
-  └─ 3-year ordinary reassessment window (Skatteforvaltningsloven § 31)
-  └─ 10-year window for intentional errors (§ 32)
-```
-
----
-
-## 5. VAT Return Field Specification
-
-All mandatory and optional fields in a Danish momsangivelse:
-
-| Field ID | Danish Name | English Name | Data Type | Notes |
-|---|---|---|---|---|
-| `rubrik_a` | Salgsmoms (udgående moms) | Output VAT | Decimal (18,2) | VAT charged on domestic sales at 25%. Always non-negative. |
-| `rubrik_b` | Købsmoms (indgående moms) | Input VAT | Decimal (18,2) | Deductible VAT on business purchases. Always non-negative. |
-| `rubrik_c` | Moms af EU-varekøb | EU acquisition VAT | Decimal (18,2) | Self-assessed VAT on goods bought from EU VAT-registered suppliers. |
-| `rubrik_d` | EU-varesalg og ydelser | EU intra-community sales value | Decimal (18,2) | Value (excl. VAT) of goods/services to VAT-registered EU customers. Zero-rated. Triggers Listesystem filing. |
-| `rubrik_e` | Importmoms | Import VAT | Decimal (18,2) | VAT on goods imported from outside the EU. |
-| `momspligtig_omsaetning` | Momspligtig omsætning | Taxable turnover | Decimal (18,2) | Total value (excl. VAT) of sales subject to Danish VAT. |
-| `momsfri_omsaetning` | Momsfri omsætning | VAT-exempt turnover | Decimal (18,2) | Sales where no VAT is charged and no input VAT is recoverable. |
-| `eksport` | Eksport (nulsats) | Zero-rated exports | Decimal (18,2) | Value of goods exported outside the EU (zero-rated under Momsloven § 34). |
-| `momstilsvar` | Momstilsvar | Net VAT payable/(refundable) | Decimal (18,2) | **Calculated:** A + C + E − B. Positive = payable; negative = refundable. |
-| `afregningsperiode` | Afregningsperiode | Filing period | String | Format: YYYY-MM (monthly), YYYY-QN (quarterly), YYYY-HN (semi-annual). |
-| `se_nummer` | SE-nummer | SE number | String(8) | 8-digit SKAT-assigned tax account number. |
-| `frist` | Angivelsesfrist | Filing deadline | Date | Computed deadline; used for late-filing penalty calculation. |
-| `korrektionsangivelse` | Er dette en korrektionsangivelse? | Is this a correction return? | Boolean | True if amending a previously filed return. |
-| `original_angivelse_id` | Oprindelig angivelses-ID | Original filing reference | UUID | Reference to the original filing if this is a correction. |
-| `kvitteringsnummer` | Kvitteringsnummer | Confirmation number | String | Assigned by SKAT on successful submission. |
-
----
-
-## 6. Architecture Review
-
-Reviewed `AGENT_ARCHITECT_SPEC.md` (dated 2026-02-23) against research findings.
-
----
-
-## 7. Gap Analysis
-
-### 7.1 Filing Module — Critical Missing Fields
-
-**Location:** `AGENT_ARCHITECT_SPEC.md` Section 3.2 (`app/models/filing.py`) and Section 3.3 (`app/schemas/filing.py`)
-
-The `Filing` model currently contains only:
-```python
-filing_period: str       # e.g. "2024-Q1"
-filing_type: str         # "VAT" or "INCOME_TAX"
-total_amount: Decimal    # single aggregate number
-submitted_at: datetime
-```
-
-And `FilingLineItem` contains:
-```python
-description: str
-amount: Decimal
-```
-
-**Gaps:**
-
-| Gap | Impact | Danish Legal Basis |
-|---|---|---|
-| No `rubrik_a` (salgsmoms) field | Cannot represent a real momsangivelse | Momsloven § 56 |
-| No `rubrik_b` (købsmoms) field | Cannot calculate momstilsvar | Momsloven § 37 |
-| No `rubrik_c` (EU acquisition VAT) field | EU acquisitions unrepresented | Momsloven § 11 |
-| No `rubrik_d` (EU intra-community sales) field | Cannot trigger Listesystem obligation | Momsloven § 34 |
-| No `rubrik_e` (import VAT) field | Import obligations unrepresented | Momsloven § 12 |
-| No `momspligtig_omsaetning` field | Cannot report total taxable turnover | SKAT form requirement |
-| No `momsfri_omsaetning` field | Exempt sales not captured | Momsloven § 13 |
-| No `eksport` field | Exports not separately tracked | Momsloven § 34 |
-| No `momstilsvar` computed field | Core output of momsangivelse missing | Momsloven § 56 |
-| No `frist` (filing deadline) field | Deadline enforcement impossible | Bekendtgørelse om moms §§ 74–77 |
-| No `korrektionsangivelse` flag | Cannot model correction returns | Skatteforvaltningsloven § 31 |
-| No `se_nummer` reference on filing | Filing not linked to SKAT tax account | Core identifier for momsangivelse |
-| `FilingLineItem` is free-text description+amount | **Completely wrong abstraction** — a momsangivelse has fixed Rubrik fields, not arbitrary line items | Momsloven § 56 |
-
-> **Severity:** The `FilingLineItem` abstraction is fundamentally wrong for VAT returns. A Danish momsangivelse is a fixed-field form. The line item model may suit income tax or other returns, but for `filing_type = "VAT"`, the model needs dedicated Rubrik fields instead.
-
-### 7.2 Filing Module — Missing Business Rules
-
-**Location:** `app/services/filing.py` (Section 3.5)
-
-| Missing Rule | Description | Impact |
-|---|---|---|
-| No deadline calculation | `submit_filing()` does not compute or enforce angivelsesfrist | Late filings not flagged; penalties cannot be calculated |
-| No SE number ownership check | Any TAXPAYER can file for any `party_id` | Security risk — businesses should only file for their own SE number |
-| No afregningsperiode eligibility check | No validation that the filing period matches the party's assigned frequency | Monthly filer cannot submit quarterly and vice versa |
-| No duplicate period check | Same SE number can submit two returns for the same period | One return per period per SE number is the rule |
-| No momstilsvar calculation | Service does not compute Rubrik A + C + E − B | Most fundamental output of a VAT return is not computed |
-| No correction return chain | No logic for `korrektionsangivelse` pointing to original return | Cannot model amended returns |
-
-### 7.3 Party/Registration Module — Missing Danish Identifiers
-
-**Location:** Existing `app/models/party.py` and `app/schemas/party.py`
-
-| Gap | Description | Impact |
-|---|---|---|
-| No `cvr_nummer` dedicated field | Stored as generic `PartyIdentifier` with `identifierTypeCL = "TIN"` | CVR must be validated (8 digits, modulus-11), indexed, and uniquely constrained |
-| No `se_nummer` field | Not present anywhere | Filings need to reference SE number, not party UUID |
-| No `vat_registration_date` field | Date of VAT registration with SKAT not stored | Required for computing first filing period and deadline |
-| No `afregningsperiode` (filing frequency) on party | MONTHLY/QUARTERLY/SEMI_ANNUAL not stored | Filing module cannot validate whether a filing period is valid for this party |
-| No `db07_kode` (industry/branch code) field | DB07/NACE classification not stored | Required for audit risk profiling and sector-specific VAT rules |
-| No `nemkonto` (bank account) field | NemKonto for VAT refunds not stored | Cannot process automated refunds |
-| `party_type_code = "ORGADM1"` opaque code | No mapping to Danish entity types (ApS, A/S, ENK, etc.) | Meaningless to Danish users |
-| `identifierTypeCL = "TIN"` generic label | Should use `"CVR"` and `"SE"` as distinct identifier types | Ambiguous; does not distinguish CVR from SE |
-| `partyStateCL = "IN_BUSINESS"` generic state | Should include: `AKTIV`, `UNDER_TVANGSOPLOSNING`, `OPHOERT`, `KONKURS` | Does not align with CVR register status codes |
-
-### 7.4 Assessment Module — Missing Danish Tax Concepts
-
-**Location:** `AGENT_ARCHITECT_SPEC.md` Section 4.2 (`app/models/assessment.py`)
-
-| Gap | Description | Impact |
-|---|---|---|
-| `assessment_date` stored as `String(20)` | Should be a proper `Date` column | String dates cannot be sorted or compared correctly |
-| No `agterskrivelse_sent_at` field | Danish law requires SKAT to issue a proposed assessment before the final decision | Cannot model the mandatory "hearing" step in Danish administrative law |
-| No `afgoerelse_type` (decision type) field | Assessment can be: accept, partial adjustment, full adjustment, cancellation | All decisions collapsed into generic status |
-| No `klage_frist` (appeal deadline) field | Appeal must be filed within 3 months of the afgørelse | Cannot enforce or display appeal deadlines |
-| No `interest_amount` (rentetillaeg) field | Interest on late payment is a distinct line from the penalty surcharge | Combined into `penalties` column — legally insufficient |
-| Status `APPEALED` is terminal | In Danish procedure, an appeal can be upheld, partially allowed, or overturned | State machine is incomplete |
-
-### 7.5 API Contract — Missing Endpoints
-
-| Missing Endpoint | Description |
-|---|---|
-| `GET /api/v1/parties?cvr={cvr_number}` | Look up party by CVR number |
-| `GET /api/v1/filings?se_nummer={se}` | Look up all filings for a given SE number |
-| `POST /api/v1/filings/{id}/correct` | Submit a correction return (korrektionsangivelse) |
-| `GET /api/v1/parties/{id}/afregningsperioder` | List all valid filing periods for a party (based on their frequency) |
-| `GET /api/v1/deadlines?party_id={id}&period={period}` | Calculate the filing deadline for a given party and period |
-| `POST /api/v1/assessments/{id}/agterskrivelse` | Mark that the proposed assessment notice has been sent |
-
-### 7.6 Terminology Mismatches
-
-| Current (Spec) | Correct Danish Terminology | Context |
-|---|---|---|
-| `filing_type = "VAT"` | `angivelse_type = "MOMS"` | Danish term for a VAT return is "momsangivelse" |
-| `filing_type = "INCOME_TAX"` | `angivelse_type = "SELSKABSSKAT"` or `"SELVANGIVELSE"` | Income tax returns are separate in Danish tax law |
-| `status = "DRAFT"` | `status = "KLADDE"` | Should use Danish terms or keep English consistently throughout |
-| `penalties` on Assessment | `tillaeg` + `renter` (separate fields) | Surcharges (tillæg) and interest (renter) have different legal bases |
-| `notes` on Assessment | `begrundelse` | "Begrundelse" (reasoning) is the legally required field per Forvaltningsloven § 22 |
-| `assessed_by` | `sagsbehandler_id` | "Sagsbehandler" is the Danish term for the case officer |
-
----
-
-## 8. Recommendations
-
-### Priority: High (blocks correct legal compliance)
-
-| # | Recommendation | Affected File(s) | Action |
-|---|---|---|---|
-| H1 | Replace `FilingLineItem` with dedicated Rubrik fields on the `Filing` model | `app/models/filing.py`, `app/schemas/filing.py`, migration `0003` | Add `rubrik_a` through `rubrik_e`, `momspligtig_omsaetning`, `momsfri_omsaetning`, `eksport`, `momstilsvar` as `Numeric(18,2)` columns |
-| H2 | Add `cvr_nummer` (String(8), unique) and `se_nummer` (String(8)) as first-class fields on `Party` | `app/models/party.py`, `app/schemas/party.py` | New columns with modulus-11 CVR validation in the service layer |
-| H3 | Add `afregningsperiode_type` (MONTHLY/QUARTERLY/SEMI_ANNUAL) to `Party` | `app/models/party.py` | Service must validate that each `Filing.filing_period` matches the party's assigned frequency |
-| H4 | Add `vat_registration_date` (Date, nullable) to `Party` | `app/models/party.py` | Needed to compute first filing period and deadline |
-| H5 | Implement `momstilsvar` calculation in `FilingService`: `momstilsvar = rubrik_a + rubrik_c + rubrik_e - rubrik_b` | `app/services/filing.py` | Calculated and stored on the model; exposed in `FilingRead` schema |
-| H6 | Implement filing deadline calculation: compute `angivelsesfrist` from `afregningsperiode_type` and period string | `app/services/filing.py`, `app/models/filing.py` | Add `frist` Date column; check on submit whether current timestamp exceeds deadline |
-| H7 | Add uniqueness constraint: one momsangivelse per (se_nummer, filing_period, angivelse_type) | `app/models/filing.py` | `UniqueConstraint("se_nummer", "filing_period", "angivelse_type")`; return HTTP 409 on duplicate |
-
-### Priority: Medium (significant improvements)
-
-| # | Recommendation | Affected File(s) | Action |
-|---|---|---|---|
-| M1 | Add `korrektionsangivelse` (Boolean) and `original_filing_id` (UUID FK) to `Filing` | `app/models/filing.py`, `app/schemas/filing.py` | Enables correction return workflow; add `POST /api/v1/filings/{id}/correct` endpoint |
-| M2 | Add `db07_kode` (String(6)) to `Party` model | `app/models/party.py` | Required for SKAT risk-profiling and sector-specific VAT rules |
-| M3 | Change `assessment.assessment_date` from `String(20)` to `Date` column | `app/models/assessment.py`, migration `0004` | Fix type safety; enables date arithmetic for appeal deadlines |
-| M4 | Add `agterskrivelse_sent_at` (DateTime) and `klage_frist` (Date) to `TaxAssessment` | `app/models/assessment.py` | Models the mandatory Danish administrative law hearing step |
-| M5 | Separate `penalties` into `tillaeg` (Numeric 18,2) and `renter` (Numeric 18,2) on `TaxAssessment` | `app/models/assessment.py`, `app/schemas/assessment.py` | Surcharges and interest have different legal bases |
-| M6 | Add `GET /api/v1/parties?cvr={cvr}` search endpoint | `app/routers/parties.py` | CVR lookup is the primary way Danish users identify businesses |
-| M7 | Validate `filing_period` format in `FilingCreate` schema | `app/schemas/filing.py` | Accept `YYYY-MM`, `YYYY-Q[1-4]`, `YYYY-H[1-2]` only |
-| M8 | Expand `Assessment.status` to include `AGTERSKRIVELSE_SENDT` state | `app/services/assessment.py` | `PENDING` → `AGTERSKRIVELSE_SENDT` → `COMPLETE` / `APPEALED` |
-
-### Priority: Low (Danish convention alignment)
-
-| # | Recommendation | Affected File(s) | Action |
-|---|---|---|---|
-| L1 | Rename `filing_type` values from `"VAT"` / `"INCOME_TAX"` to `"MOMS"` / `"SELSKABSSKAT"` | `app/models/filing.py`, `types/filing.ts` | Aligns with SKAT terminology |
-| L2 | Document valid `identifierTypeCL` values: `"CVR"`, `"SE"`, `"CPR"` | `app/schemas/party.py` | Replace generic `"TIN"` with Danish-correct identifier type codes |
-| L3 | Document valid `partyStateCL` values: `"AKTIV"`, `"OPHOERT"`, `"UNDER_KONKURS"`, `"TVANGSOPLOEST"` | `app/schemas/party.py` | Aligns with CVR register status codes |
-| L4 | Document valid `party_type_code` values: `"APS"`, `"AS"`, `"ENK"`, `"IS"`, `"KS"`, `"FILIAL"` | `app/schemas/party.py` | Replace opaque `"ORGADM1"` with Danish entity type codes |
-| L5 | Document valid `party_role_type_code` values: `"MOMSREGISTRERET"`, `"ARBEJDSGIVER"`, `"IMPORTOER"` | `app/schemas/party_role.py` | Replace `"BUSINSSDM1"` with meaningful Danish tax role codes |
-| L6 | Emit `ListesystemObligationRaised` event when `rubrik_d > 0` | `app/events/filing_events.py` | Future trigger for Listesystem filing requirement |
-| L7 | Add `nemkonto` (String(18), nullable) to `Party` model | `app/models/party.py` | Required for processing VAT refunds (momstilsvar < 0) |
-| L8 | Rename `notes` to `begrundelse` on `TaxAssessment` | `app/models/assessment.py` | "Begrundelse" is the legally required reasoning per Forvaltningsloven § 22 |
-| L9 | Add Danish period display helper in `frontend/lib/utils/formatters.ts` | `frontend/lib/utils/formatters.ts` | `"2024-Q1"` → `"1. kvartal 2024"`, `"2024-H1"` → `"1. halvår 2024"` |
-| L10 | Show `angivelsesfrist` in filings list with colour-coded deadline proximity | `frontend/components/filings/FilingTable.tsx` | Red = overdue, orange = within 7 days, green = on time |
-
----
-
-## 9. Proposed Updated Filing Model
-
-Recommended schema for `app/models/filing.py` to replace Section 3.2 of `AGENT_ARCHITECT_SPEC.md`:
-
-```python
-from sqlalchemy import Boolean, Date, UniqueConstraint
-
-class Filing(Base, TimestampMixin):
-    __tablename__ = "filings"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
-    party_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("parties.id", ondelete="CASCADE"),
-        nullable=False, index=True,
-    )
-    se_nummer: Mapped[str] = mapped_column(String(8), nullable=False, index=True)
-
-    # Period identification
-    afregningsperiode_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    # Values: "MONTHLY" | "QUARTERLY" | "SEMI_ANNUAL"
-    filing_period: Mapped[str] = mapped_column(String(20), nullable=False)
-    # Format: "YYYY-MM" | "YYYY-Q1..Q4" | "YYYY-H1..H2"
-    frist: Mapped[date | None] = mapped_column(Date, nullable=True)
-
-    # Filing classification
-    angivelse_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    # Values: "MOMS" | "SELSKABSSKAT" | "LONSUMSAFGIFT"
-    status: Mapped[str] = mapped_column(String(50), nullable=False, default="KLADDE")
-    # Values: "KLADDE" | "INDBERETTET" | "UNDER_BEHANDLING" | "GODKENDT" | "AFVIST"
-
-    # Core Rubrik fields (momsangivelse — Momsloven § 56)
-    rubrik_a: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
-    rubrik_b: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
-    rubrik_c: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
-    rubrik_d: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
-    rubrik_e: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
-
-    # Summary fields
-    momspligtig_omsaetning: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
-    momsfri_omsaetning: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
-    eksport: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
-    momstilsvar: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
-    # Computed: rubrik_a + rubrik_c + rubrik_e - rubrik_b
-
-    # Submission tracking
-    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    kvitteringsnummer: Mapped[str | None] = mapped_column(String(50), nullable=True)
-
-    # Correction return support
-    korrektionsangivelse: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    original_filing_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("filings.id", ondelete="SET NULL"), nullable=True
-    )
-
-    __table_args__ = (
-        UniqueConstraint(
-            "se_nummer", "filing_period", "angivelse_type",
-            name="uq_filing_se_nummer_period_type"
-        ),
-    )
-```
-
----
-
-## 10. Sources
-
-- **Momsloven** (Lovbekendtgørelse nr. 1021 af 26. september 2019) — Danish VAT Act
-- **Skatteforvaltningsloven** (LBK nr 635 af 13. juni 2012, as amended) — Danish Tax Administration Act
-- **Forvaltningsloven** (LBK nr 433 af 22. april 2014) — Danish Public Administration Act
-- **SKAT vejledning: Moms** — SKAT's official VAT guidance for businesses (skat.dk)
-- **Erhvervsstyrelsen CVR-register** (cvr.dk) — Danish Business Authority company register
-- **EU Council Directive 2006/112/EC** — EU VAT Directive implemented by Momsloven
-- **DB07** (Dansk Branchekode 2007) — Danish implementation of NACE Rev. 2
-- **AGENT_ARCHITECT_SPEC.md** (2026-02-23) — Platform architecture specification under review
+| Filing schema (`line_items` vs fixed rubrik fields) | Fixed canonical fields for Phase 2. | Free-form line-items as canonical. | Legal/official filing pattern is fixed-field; line-items remain optional convenience later (4C). |
+| Terminology persistence vs UI labels | Persist stable English technical enum keys; expose Danish legal labels at API/UI boundary mapping. | Persist only Danish labels in DB; or only English labels in UI. | Keeps schema stability and migration safety while preserving legal wording where needed. |
+| Penalties/rates implementation | Config-driven policy values with effective dates and audit trail. | Hardcode fee/rate constants in business logic. | Statutory rates/fees and guidance amounts can change; config avoids emergency code redeploys. |
+| Access policy strictness | Row-level tenant scoping + explicit delegation checks + admin audit logs. | Broad role access without ownership checks. | Product decision mandates strict isolation now; reduces legal/security risk. |
+| UX replication fidelity | Replicate workflow/state patterns only; avoid copying SKAT branding/assets verbatim. | Pixel-copy SKAT UI. | Meets usability goal without IP/brand copying risk and without reliance on protected assets. |
+
+## 6) Intentional Uncertainty (Explicit)
+
+Areas not fully publicly verifiable without active TastSelv login are intentionally marked as uncertain and must not be guessed:
+
+1. Exact current authenticated field ordering and wording across all taxpayer profiles.
+2. Full validation/error message catalog and server error codes shown in-session.
+3. Whether additional rubrik groups beyond publicly documented set are conditionally shown for specific registration types.
+
+Implementation rule:
+- Treat uncertain items as feature-flagged extensions, not as Phase 2 blockers.
+- Preserve additive schema strategy so new official fields can be added without breaking canonical payloads.
+
+## 7) Replication Policy Note
+
+Replicate SKAT workflow and interaction patterns (step order, required-field behavior, validation, confirmation/receipt, correction gating), but do not copy protected branding, logos, icons, or proprietary visual assets verbatim.
+
+## 8) Changelog (This Revision)
+
+- Replaced broad narrative with source-traceable implementation spec.
+- Added claim-level evidence table with claim IDs, legal anchors, dates, confidence.
+- Added SKAT VAT Filing UX benchmark with flow, controls, states, and limits.
+- Added strict `Required now / Recommended now / Defer` MVP legal baseline.
+- Added Architect Unblock Package (mandatory Phase 2 fields/rules/endpoints only).
+- Marked policy-variable fee/rate values as configurable (not hardcoded).
+- Added explicit uncertainty section for login-gated/non-public details.
+- Added replication policy to prevent branding/IP overreach.
+- Kept phase discipline aligned with fixed product decisions.
