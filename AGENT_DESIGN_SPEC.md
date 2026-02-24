@@ -118,8 +118,8 @@ States: default, hover, focus, disabled, loading
 
 Canonical backend values with English primary labels and Danish legal aliases:
 - `DRAFT` -> Draft (`Kladde`)
-- `SUBMITTED` -> Submitted (`Indberettet`)
-- `UNDER_REVIEW` -> Under Review (`Under behandling`)
+- `SUBMITTED_WITH_RECEIPT` -> Submitted with Receipt (`Indberettet med kvittering`)
+- `UNDER_REVIEW` -> Under Review (`Under behandling`) [reserved/deferred in Phase 2]
 - `ACCEPTED` -> Accepted (`Godkendt`)
 - `REJECTED` -> Rejected (`Afvist`)
 - `CORRECTED` -> Corrected (`Korrigeret`)
@@ -327,22 +327,20 @@ English-first labels:
 1. Open `/filings/new`
 2. Enter fixed VAT fields and required period/SE data
 3. Save draft (`POST /api/v1/filings`) -> status `DRAFT`
-4. Submit (`PATCH /api/v1/filings/{id}/submit`) -> status `SUBMITTED`
+4. Submit (`PATCH /api/v1/filings/{id}/submit`) -> status `SUBMITTED_WITH_RECEIPT`
 5. View receipt data (`kvitteringsnummer`) and deadline/late indicators on detail
 
 ### 7.3 Officer creates and resolves assessment (SSOT-aligned)
 
 1. Open filing detail (`GET /api/v1/filings/{id}`)
-2. Create assessment (`POST /api/v1/assessments`)  
-Filing side effect: `SUBMITTED -> ACCEPTED` (architect-defined)
-3. Update assessment status (`PATCH /api/v1/assessments/{id}/status`)  
-When status becomes `COMPLETE`, filing status is set by `decision_outcome` (`ACCEPTED` or `REJECTED`)
+2. Create assessment (`POST /api/v1/assessments`) -> assessment status `PENDING`
+3. Update assessment status (`PATCH /api/v1/assessments/{id}/status`) -> assessment status per assessment state rules only
 
 ### 7.4 Taxpayer appeals completed assessment
 
 1. Open assessment detail (`GET /api/v1/assessments/{id}`)
 2. Submit appeal (`POST /api/v1/assessments/{id}/appeal`) before `appeal_deadline`
-3. Resulting state: assessment `COMPLETE -> APPEALED`; filing `ACCEPTED/REJECTED -> UNDER_REVIEW`
+3. Resulting state: assessment `COMPLETE -> APPEALED` (no implicit filing state change)
 
 ### 7.5 Admin user and setting management
 
@@ -386,8 +384,6 @@ When status becomes `COMPLETE`, filing status is set by `decision_outcome` (`ACC
 | Update admin setting | `PATCH /api/v1/admin/settings/{key}` | admin setting patch payload | `AdminSettingRead` | A | In Scope Phase 2 |
 
 Deferred actions:
-- Dedicated receipt retrieval endpoint action (`GET /api/v1/filings/{id}/receipt`) is not in architect contract
-- Dedicated deadline calculator endpoint action (`GET /api/v1/vat-deadlines`) is not in architect contract
 - Manual line-item-first filing editor (non-canonical by decision)
 
 ---
@@ -467,7 +463,7 @@ Deferred actions:
 | Assessment appeal | In Scope Phase 2 | `POST /assessments/{id}/appeal` exists |
 | Admin users | In Scope Phase 2 | `GET/POST/PATCH /api/v1/admin/users...` exists |
 | Admin settings | In Scope Phase 2 | `GET/PATCH /api/v1/admin/settings...` exists |
-| Dedicated receipt retrieval view | Deferred | no receipt endpoint in architect contract |
+| Dedicated receipt retrieval view | Deferred | receipt is already shown on filing detail; separate page is deferred |
 | Manual line-item editor | Deferred | non-canonical by 4C decision |
 
 ---
@@ -489,13 +485,15 @@ Failure handling:
 ### 11.2 Filing and Assessment SSOT (Architect 3.1.1)
 
 - `POST /filings`: `NONE -> DRAFT`
-- `PATCH /filings/{id}/submit`: `DRAFT -> SUBMITTED`
-- `POST /assessments`: filing `SUBMITTED -> ACCEPTED`, assessment `NONE -> PENDING`
-- `PATCH /assessments/{id}/status` to `COMPLETE`: filing becomes `ACCEPTED` or `REJECTED` from `decision_outcome`
-- `POST /assessments/{id}/appeal`: assessment `COMPLETE -> APPEALED`, filing `ACCEPTED/REJECTED -> UNDER_REVIEW`
+- `PATCH /filings/{id}/submit`: `DRAFT -> SUBMITTED_WITH_RECEIPT`
 - `POST /filings/{id}/correct`: previous filing `-> CORRECTED`, new version starts `DRAFT`
+- `POST /assessments`: filing `NO_CHANGE`, assessment `NONE -> PENDING`
+- `PATCH /assessments/{id}/status`: filing `NO_CHANGE`, assessment `PENDING -> COMPLETE` or `COMPLETE -> APPEALED`
+- `POST /assessments/{id}/appeal`: filing `NO_CHANGE`, assessment `COMPLETE -> APPEALED`
+- `UNDER_REVIEW` is reserved/deferred in Phase 2 and is not used in active transition paths.
 
-No extra side effects are described in UI unless listed in SSOT above.
+Assessment actions must not implicitly mutate filing state.  
+Filing state transitions occur only through explicit filing endpoints.
 
 ### 11.3 Deadline and Penalty Handling
 
@@ -526,8 +524,8 @@ No extra side effects are described in UI unless listed in SSOT above.
 | Domain Value | Display Label |
 |---|---|
 | `DRAFT` | Draft (`Kladde`) |
-| `SUBMITTED` | Submitted (`Indberettet`) |
-| `UNDER_REVIEW` | Under Review (`Under behandling`) |
+| `SUBMITTED_WITH_RECEIPT` | Submitted with Receipt (`Indberettet med kvittering`) |
+| `UNDER_REVIEW` | Under Review (`Under behandling`) [reserved/deferred in Phase 2] |
 | `ACCEPTED` | Accepted (`Godkendt`) |
 | `REJECTED` | Rejected (`Afvist`) |
 | `CORRECTED` | Corrected (`Korrigeret`) |
@@ -619,16 +617,15 @@ Notes:
 
 ---
 
-## 16. Pass-2 Delta + Unresolved Blockers
+## 16. Pass-3 Delta (State-Policy Alignment)
 
-Pass-2 delta:
-- Removed pass-1 adapter assumptions; filing mapping now uses architect canonical fields directly.
-- Reclassified parties list, assessments list, and full admin users/settings as In Scope based on new endpoints.
-- Updated state behavior to architect SSOT, including explicit filing side effects on assessment create/status/appeal.
-- Added correction flow and appeal flow as first-class UI actions with endpoint mapping.
-- Updated data alignment for new fields: `se_nummer`, `afregningsperiode_type`, `version`, `frist`, `late_filing_penalty`, `decision_outcome`, `surcharge_amount`, `interest_amount`.
+- Removed all assessment flow statements that implied filing-state mutation.
+- Aligned filing status terminology to canonical `SUBMITTED_WITH_RECEIPT` (replacing legacy `SUBMITTED` where it represented filing domain state).
+- Updated SSOT/state and terminology sections to enforce: only filing endpoints mutate filing state.
 
-Unresolved blockers:
-- Dashboard summary response schema is not explicitly typed in architect spec; UI must treat summary payload as server-driven key/value until schema is published.
-- Researcher recommends dedicated receipt and deadline endpoints; architect contract currently exposes receipt/deadline only through filing and assessment resources.
-- Researcher policy calls for configurable sanction/rate policy store; architect filing service currently specifies a deterministic hardcoded late penalty formula (`DKK 65/day`, cap `DKK 1,000`).
+## 17. Micro-fix Delta
+
+- Removed stale deferred lines: `Dedicated receipt retrieval endpoint action (GET /api/v1/filings/{id}/receipt) is not in architect contract` and `Dedicated deadline calculator endpoint action (GET /api/v1/vat-deadlines) is not in architect contract`.
+- Corrected deferred scope line to: `Dedicated receipt retrieval view | Deferred | receipt is already shown on filing detail; separate page is deferred`.
+- Added reserved-phase wording for `UNDER_REVIEW` in both status mapping lines: `UNDER_REVIEW -> Under Review (Under behandling) [reserved/deferred in Phase 2]`.
+- Added SSOT line: `UNDER_REVIEW is reserved/deferred in Phase 2 and is not used in active transition paths.`
