@@ -1,7 +1,7 @@
 # Agent Architect Specification — Danish Tax Administration Platform
 
 **Status:** Authoritative source of truth for all Coder agents
-**Date:** 2026-02-23
+**Date:** 2026-02-24
 **Author:** Architect Agent
 **Supersedes:** Nothing (first full spec)
 
@@ -661,13 +661,36 @@ async def me(current_user: User = Depends(get_current_user)) -> UserRead:
     return UserRead.from_orm(current_user)
 ```
 
+### 2.8 Authorization and Ownership Policy (Hard Rule)
+
+All protected endpoints use deny-by-default authorization with explicit row-level ownership checks.
+
+- `ADMIN`: full read/write access to all resources.
+- `OFFICER`: full read/write for parties, filings, and assessments; no admin user/settings writes.
+- `TAXPAYER`: may only read/write resources where `resource.party_id == current_user.party_id`.
+
+Ownership enforcement contract:
+
+| Resource | Ownership predicate for TAXPAYER | Failure mode |
+|---|---|---|
+| `Party` | `party.id == current_user.party_id` | Return `404` to avoid enumeration |
+| `Filing` | `filing.party_id == current_user.party_id` | Return `404` to avoid enumeration |
+| `Assessment` | `assessment.filing.party_id == current_user.party_id` | Return `404` to avoid enumeration |
+
+Shared auth failure rules:
+
+- Not authenticated: `401`.
+- Authenticated but missing role: `403`.
+- Domain validation failure: `422`.
+- Business rule conflict (duplicate filing/assessment): `409`.
+
 ---
 
 ## 3. Tax Filing Module
 
 ### 3.1 Overview
 
-The Filing module follows the **identical** structural pattern as the Registration module.
+Phase 2 filing is VAT-first (`4C` decision): canonical persistence and API payload are fixed official VAT fields. Optional line-item detail is allowed only as a non-canonical convenience payload.
 
 | Registration (existing) | Filing (new) |
 |---|---|
@@ -679,17 +702,33 @@ The Filing module follows the **identical** structural pattern as the Registrati
 | `app/events/handlers/party_handlers.py` | `app/events/handlers/filing_handlers.py` |
 | `app/routers/parties.py` | `app/routers/filings.py` |
 
+### 3.1.1 Canonical State Transition Table (Single Source of Truth)
+
+The following table is the only valid state machine for Filing + Assessment side effects.
+
+| Trigger | Preconditions | Filing transition | Assessment transition | Required side effects |
+|---|---|---|---|---|
+| `POST /api/v1/filings` | Role + ownership pass | `NONE -> DRAFT` | `NONE` | Compute `momstilsvar` and `frist` |
+| `PATCH /api/v1/filings/{id}/submit` | Filing is `DRAFT` | `DRAFT -> SUBMITTED` | `NONE` | Compute late days + daily penalty (`DKK 65`, cap `DKK 1,000`) |
+| `POST /api/v1/assessments` | Filing is `SUBMITTED` | `SUBMITTED -> ACCEPTED` | `NONE -> PENDING` | Publish `AssessmentCreated` with filing status side effect |
+| `PATCH /api/v1/assessments/{id}/status` to `COMPLETE` | Assessment is `PENDING` or `APPEALED` | `ACCEPTED` or `UNDER_REVIEW` -> `ACCEPTED`/`REJECTED` based on `decision_outcome` | `PENDING/APPEALED -> COMPLETE` | Persist deadlines, surcharge, and interest |
+| `POST /api/v1/assessments/{id}/appeal` | Assessment is `COMPLETE`, caller owns filing | `ACCEPTED/REJECTED -> UNDER_REVIEW` | `COMPLETE -> APPEALED` | Set `appealed_at`; enforce 3-month appeal deadline |
+| `POST /api/v1/filings/{id}/correct` | Filing is `SUBMITTED`/`ACCEPTED`/`REJECTED` | previous version -> `CORRECTED`; new version `DRAFT` | `NONE` | Increment filing `version`, link `original_filing_id` |
+
 ### 3.2 Domain Model
 
 **`app/models/filing.py`**
 ```python
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import (
+    Boolean, Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, new_uuid
 
@@ -702,75 +741,84 @@ class Filing(Base, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("parties.id", ondelete="CASCADE"),
         nullable=False, index=True,
     )
+    se_nummer: Mapped[str] = mapped_column(String(8), nullable=False, index=True)
+    afregningsperiode_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Values: MONTHLY | QUARTERLY | SEMI_ANNUAL
     filing_period: Mapped[str] = mapped_column(String(20), nullable=False)
-    filing_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    # Values: YYYY-MM | YYYY-Q1..Q4 | YYYY-H1..H2
+    angivelse_type: Mapped[str] = mapped_column(String(20), nullable=False, default="MOMS")
+    # Phase 2 hard constraint: only "MOMS" accepted
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="DRAFT")
-    total_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    # Canonical Rubrik fields (fixed official VAT return shape)
+    rubrik_a: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
+    rubrik_b: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
+    rubrik_c: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
+    rubrik_d: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
+    rubrik_e: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
+    momspligtig_omsaetning: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
+    momsfri_omsaetning: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
+    eksport: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
+    momstilsvar: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
+
+    frist: Mapped[date] = mapped_column(Date, nullable=False)
+    late_filing_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    late_filing_penalty: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    kvitteringsnummer: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    line_items: Mapped[list["FilingLineItem"]] = relationship(
-        back_populates="filing", cascade="all, delete-orphan"
+    korrektionsangivelse: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    original_filing_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("filings.id", ondelete="SET NULL"), nullable=True
     )
 
+    # Optional convenience detail from bookkeeping imports. Not legal/canonical.
+    supplemental_line_items: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
 
-class FilingLineItem(Base, TimestampMixin):
-    __tablename__ = "filing_line_items"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
-    filing_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("filings.id", ondelete="CASCADE"), nullable=False,
+    __table_args__ = (
+        UniqueConstraint(
+            "se_nummer", "filing_period", "angivelse_type", "version",
+            name="uq_filing_se_period_type_version",
+        ),
     )
-    description: Mapped[str] = mapped_column(Text, nullable=False)
-    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
-
-    filing: Mapped["Filing"] = relationship(back_populates="line_items")
 ```
 
 **Valid field values:**
 
 | Field | Valid Values |
 |---|---|
-| `filing_type` | `VAT`, `INCOME_TAX` |
-| `status` | `DRAFT`, `SUBMITTED`, `UNDER_REVIEW`, `ACCEPTED`, `REJECTED` |
-| `filing_period` | `YYYY-QN` for quarterly (e.g. `2024-Q1`), `YYYY-MM` for monthly |
+| `angivelse_type` | `MOMS` (Phase 2), all other return types explicitly deferred |
+| `status` | `DRAFT`, `SUBMITTED`, `UNDER_REVIEW`, `ACCEPTED`, `REJECTED`, `CORRECTED` |
+| `afregningsperiode_type` | `MONTHLY`, `QUARTERLY`, `SEMI_ANNUAL` |
+| `filing_period` | `YYYY-MM` (monthly), `YYYY-QN` (quarterly), `YYYY-HN` (semi-annual) |
 
 ### 3.3 Pydantic Schemas
 
 **`app/schemas/filing.py`**
 ```python
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
 
-class FilingLineItemCreate(BaseModel):
-    description: str = Field(..., examples=["Revenue from restaurant sales"])
-    amount: Decimal = Field(..., examples=[Decimal("15000.00")])
-
-
-class FilingLineItemRead(BaseModel):
-    model_config = {"from_attributes": True}
-
-    id: uuid.UUID
-    description: str
-    amount: Decimal
-    created_at: datetime
-    updated_at: datetime
-
-    @classmethod
-    def from_orm_map(cls, obj) -> "FilingLineItemRead":
-        return cls(id=obj.id, description=obj.description, amount=obj.amount,
-                   created_at=obj.created_at, updated_at=obj.updated_at)
-
-
 class FilingCreate(BaseModel):
     party_id: uuid.UUID
+    se_nummer: str = Field(..., min_length=8, max_length=8, examples=["12345678"])
+    afregningsperiode_type: str = Field(..., examples=["QUARTERLY"])
     filing_period: str = Field(..., examples=["2024-Q1"])
-    filing_type: str = Field(..., examples=["VAT"])
-    total_amount: Decimal = Field(default=Decimal("0.00"))
-    line_items: list[FilingLineItemCreate] = []
+    angivelse_type: str = Field(default="MOMS", examples=["MOMS"])
+    rubrik_a: Decimal = Field(default=Decimal("0.00"))
+    rubrik_b: Decimal = Field(default=Decimal("0.00"))
+    rubrik_c: Decimal = Field(default=Decimal("0.00"))
+    rubrik_d: Decimal = Field(default=Decimal("0.00"))
+    rubrik_e: Decimal = Field(default=Decimal("0.00"))
+    momspligtig_omsaetning: Decimal = Field(default=Decimal("0.00"))
+    momsfri_omsaetning: Decimal = Field(default=Decimal("0.00"))
+    eksport: Decimal = Field(default=Decimal("0.00"))
+    supplemental_line_items: list[dict] | None = None
 
 
 class FilingRead(BaseModel):
@@ -778,24 +826,31 @@ class FilingRead(BaseModel):
 
     id: uuid.UUID
     party_id: uuid.UUID
+    se_nummer: str
+    afregningsperiode_type: str
     filing_period: str
-    filing_type: str
+    angivelse_type: str
     status: str
-    total_amount: Decimal
+    version: int
+    rubrik_a: Decimal
+    rubrik_b: Decimal
+    rubrik_c: Decimal
+    rubrik_d: Decimal
+    rubrik_e: Decimal
+    momspligtig_omsaetning: Decimal
+    momsfri_omsaetning: Decimal
+    eksport: Decimal
+    momstilsvar: Decimal
+    frist: date
+    late_filing_days: int
+    late_filing_penalty: Decimal
     submitted_at: datetime | None
-    line_items: list[FilingLineItemRead]
+    kvitteringsnummer: str | None
+    korrektionsangivelse: bool
+    original_filing_id: uuid.UUID | None
+    supplemental_line_items: list[dict] | None
     created_at: datetime
     updated_at: datetime
-
-    @classmethod
-    def from_orm(cls, obj) -> "FilingRead":
-        return cls(
-            id=obj.id, party_id=obj.party_id, filing_period=obj.filing_period,
-            filing_type=obj.filing_type, status=obj.status, total_amount=obj.total_amount,
-            submitted_at=obj.submitted_at,
-            line_items=[FilingLineItemRead.from_orm_map(li) for li in obj.line_items],
-            created_at=obj.created_at, updated_at=obj.updated_at,
-        )
 ```
 
 ### 3.4 Repository
@@ -803,50 +858,63 @@ class FilingRead(BaseModel):
 **`app/repositories/filing.py`**
 ```python
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
-from app.models.filing import Filing, FilingLineItem
+from app.models.filing import Filing
 from app.schemas.filing import FilingCreate
 
 
 class FilingRepository:
 
-    def create_filing(self, payload: FilingCreate, db: Session) -> Filing:
+    def create_filing(
+        self, payload: FilingCreate, computed_momstilsvar, computed_frist, version: int, db: Session
+    ) -> Filing:
         filing = Filing(
             party_id=payload.party_id, filing_period=payload.filing_period,
-            filing_type=payload.filing_type, total_amount=payload.total_amount,
-            status="DRAFT",
+            se_nummer=payload.se_nummer,
+            afregningsperiode_type=payload.afregningsperiode_type,
+            angivelse_type=payload.angivelse_type,
+            status="DRAFT", version=version,
+            rubrik_a=payload.rubrik_a, rubrik_b=payload.rubrik_b, rubrik_c=payload.rubrik_c,
+            rubrik_d=payload.rubrik_d, rubrik_e=payload.rubrik_e,
+            momspligtig_omsaetning=payload.momspligtig_omsaetning,
+            momsfri_omsaetning=payload.momsfri_omsaetning, eksport=payload.eksport,
+            momstilsvar=computed_momstilsvar, frist=computed_frist,
+            supplemental_line_items=payload.supplemental_line_items,
         )
         db.add(filing)
-        db.flush()
-        for item in payload.line_items:
-            db.add(FilingLineItem(filing_id=filing.id, description=item.description, amount=item.amount))
         db.commit()
-        return self.get_filing_by_id(filing.id, db)  # type: ignore[return-value]
+        return filing
 
     def get_filing_by_id(self, filing_id: uuid.UUID, db: Session) -> Filing | None:
-        return (
-            db.query(Filing).options(selectinload(Filing.line_items))
-            .filter(Filing.id == filing_id).first()
-        )
+        return db.query(Filing).filter(Filing.id == filing_id).first()
 
     def list_filings_by_party(self, party_id: uuid.UUID, db: Session) -> list[Filing]:
-        return (
-            db.query(Filing).options(selectinload(Filing.line_items))
-            .filter(Filing.party_id == party_id)
-            .order_by(Filing.created_at.desc()).all()
-        )
+        return db.query(Filing).filter(Filing.party_id == party_id).order_by(Filing.created_at.desc()).all()
 
-    def submit_filing(self, filing_id: uuid.UUID, db: Session) -> Filing | None:
+    def list_filings(self, db: Session) -> list[Filing]:
+        return db.query(Filing).order_by(Filing.created_at.desc()).all()
+
+    def submit_filing(
+        self, filing_id: uuid.UUID, submitted_at: datetime, late_days: int, late_penalty, db: Session
+    ) -> Filing | None:
         filing = db.query(Filing).filter(Filing.id == filing_id).first()
         if filing is None:
             return None
         filing.status = "SUBMITTED"
-        filing.submitted_at = datetime.now(timezone.utc)
+        filing.submitted_at = submitted_at
+        filing.late_filing_days = late_days
+        filing.late_filing_penalty = late_penalty
         db.commit()
-        return self.get_filing_by_id(filing_id, db)
+        return filing
+
+    def mark_corrected(self, filing_id: uuid.UUID, db: Session) -> None:
+        filing = db.query(Filing).filter(Filing.id == filing_id).first()
+        if filing is not None:
+            filing.status = "CORRECTED"
+            db.commit()
 ```
 
 ### 3.5 Service
@@ -854,55 +922,116 @@ class FilingRepository:
 **`app/services/filing.py`**
 ```python
 import uuid
+from datetime import date, datetime, timezone
+from decimal import Decimal
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.events.base import EventBus
-from app.events.filing_events import FilingCreated, FilingSubmitted
+from app.events.filing_events import FilingCorrected, FilingCreated, FilingPenaltyAccrued, FilingSubmitted
 from app.models.filing import Filing
 from app.repositories.filing import FilingRepository
 from app.schemas.filing import FilingCreate
+from app.services.authz import AuthorizationPolicy
 
 
 class FilingService:
-    def __init__(self, repo: FilingRepository, bus: EventBus) -> None:
+    def __init__(self, repo: FilingRepository, bus: EventBus, authz: AuthorizationPolicy) -> None:
         self._repo = repo
         self._bus = bus
+        self._authz = authz
 
-    async def create_filing(self, payload: FilingCreate, db: Session) -> Filing:
-        filing = self._repo.create_filing(payload, db)
+    def _compute_momstilsvar(self, payload: FilingCreate) -> Decimal:
+        return payload.rubrik_a + payload.rubrik_c + payload.rubrik_e - payload.rubrik_b
+
+    def _compute_deadline(self, afregningsperiode_type: str, filing_period: str) -> date:
+        # Deterministic contract:
+        # MONTHLY => 25th of next month
+        # QUARTERLY => 10th of second month after quarter end
+        # SEMI_ANNUAL => H1 -> 1 Sep, H2 -> 1 Mar next year
+        raise NotImplementedError
+
+    def _late_penalty(self, deadline: date, submitted_at: datetime) -> tuple[int, Decimal]:
+        late_days = max((submitted_at.date() - deadline).days, 0)
+        amount = min(Decimal(late_days) * Decimal("65.00"), Decimal("1000.00"))
+        return late_days, amount
+
+    async def create_filing(self, payload: FilingCreate, current_user, db: Session) -> Filing:
+        self._authz.assert_can_create_filing(current_user, payload.party_id)
+        if payload.angivelse_type != "MOMS":
+            raise HTTPException(status_code=422, detail="Phase 2 supports only angivelse_type='MOMS'")
+        momstilsvar = self._compute_momstilsvar(payload)
+        frist = self._compute_deadline(payload.afregningsperiode_type, payload.filing_period)
+        latest = self._repo.list_filings_by_party(payload.party_id, db)
+        next_version = 1 if not latest else max(f.version for f in latest if f.filing_period == payload.filing_period) + 1
+        filing = self._repo.create_filing(payload, momstilsvar, frist, next_version, db)
         await self._bus.publish(FilingCreated(
             filing_id=filing.id, party_id=filing.party_id,
-            filing_type=filing.filing_type, filing_period=filing.filing_period,
+            se_nummer=filing.se_nummer, filing_period=filing.filing_period,
+            angivelse_type=filing.angivelse_type, momstilsvar=filing.momstilsvar, frist=filing.frist,
         ))
         return filing
 
-    async def get_filing(self, filing_id: uuid.UUID, db: Session) -> Filing:
+    async def get_filing(self, filing_id: uuid.UUID, current_user, db: Session) -> Filing:
         filing = self._repo.get_filing_by_id(filing_id, db)
         if filing is None:
             raise HTTPException(status_code=404, detail="Filing not found")
+        self._authz.assert_can_read_filing(current_user, filing)
         return filing
 
-    async def list_filings_for_party(self, party_id: uuid.UUID, db: Session) -> list[Filing]:
+    async def list_filings_for_party(self, party_id: uuid.UUID, current_user, db: Session) -> list[Filing]:
+        self._authz.assert_can_read_party(current_user, party_id)
         return self._repo.list_filings_by_party(party_id, db)
 
-    async def submit_filing(self, filing_id: uuid.UUID, db: Session) -> Filing:
+    async def list_filings(self, current_user, db: Session) -> list[Filing]:
+        if current_user.role == "TAXPAYER":
+            return self._repo.list_filings_by_party(current_user.party_id, db)
+        return self._repo.list_filings(db)
+
+    async def submit_filing(self, filing_id: uuid.UUID, current_user, db: Session) -> Filing:
         filing = self._repo.get_filing_by_id(filing_id, db)
         if filing is None:
             raise HTTPException(status_code=404, detail="Filing not found")
+        self._authz.assert_can_edit_filing(current_user, filing)
         if filing.status != "DRAFT":
             raise HTTPException(
                 status_code=400,
                 detail=f"Filing cannot be submitted from status '{filing.status}'. Only DRAFT filings may be submitted.",
             )
-        filing = self._repo.submit_filing(filing_id, db)
+        submitted_at = datetime.now(timezone.utc)
+        late_days, late_penalty = self._late_penalty(filing.frist, submitted_at)
+        filing = self._repo.submit_filing(filing_id, submitted_at, late_days, late_penalty, db)
         await self._bus.publish(FilingSubmitted(
             filing_id=filing.id, party_id=filing.party_id,
-            filing_type=filing.filing_type, filing_period=filing.filing_period,
-            total_amount=filing.total_amount,
+            se_nummer=filing.se_nummer, angivelse_type=filing.angivelse_type,
+            filing_period=filing.filing_period, momstilsvar=filing.momstilsvar,
+            frist=filing.frist, late_filing_days=filing.late_filing_days,
+            late_filing_penalty=filing.late_filing_penalty,
         ))
+        if filing.late_filing_days > 0:
+            await self._bus.publish(FilingPenaltyAccrued(
+                filing_id=filing.id, party_id=filing.party_id,
+                days_overdue=filing.late_filing_days, penalty_amount=filing.late_filing_penalty,
+            ))
         return filing
+
+    async def correct_filing(self, filing_id: uuid.UUID, payload: FilingCreate, current_user, db: Session) -> Filing:
+        original = await self.get_filing(filing_id, current_user, db)
+        if original.status not in {"SUBMITTED", "ACCEPTED", "REJECTED"}:
+            raise HTTPException(status_code=400, detail="Only submitted/resolved filings can be corrected")
+        payload.angivelse_type = original.angivelse_type
+        payload.party_id = original.party_id
+        payload.se_nummer = original.se_nummer
+        correction = await self.create_filing(payload, current_user, db)
+        correction.korrektionsangivelse = True
+        correction.original_filing_id = original.id
+        self._repo.mark_corrected(original.id, db)
+        await self._bus.publish(FilingCorrected(
+            original_filing_id=original.id, corrected_filing_id=correction.id,
+            party_id=original.party_id, se_nummer=original.se_nummer,
+        ))
+        return correction
 ```
 
 ### 3.6 Domain Events
@@ -910,6 +1039,7 @@ class FilingService:
 **`app/events/filing_events.py`**
 ```python
 import uuid
+from datetime import date
 from decimal import Decimal
 
 from app.events.base import BaseEvent
@@ -918,39 +1048,75 @@ from app.events.base import BaseEvent
 class FilingCreated(BaseEvent):
     filing_id: uuid.UUID
     party_id: uuid.UUID
-    filing_type: str
+    se_nummer: str
     filing_period: str
+    angivelse_type: str
+    momstilsvar: Decimal
+    frist: date
 
 
 class FilingSubmitted(BaseEvent):
     filing_id: uuid.UUID
     party_id: uuid.UUID
-    filing_type: str
+    se_nummer: str
+    angivelse_type: str
     filing_period: str
-    total_amount: Decimal
+    momstilsvar: Decimal
+    frist: date
+    late_filing_days: int
+    late_filing_penalty: Decimal
+
+
+class FilingPenaltyAccrued(BaseEvent):
+    filing_id: uuid.UUID
+    party_id: uuid.UUID
+    days_overdue: int
+    penalty_amount: Decimal
+
+
+class FilingCorrected(BaseEvent):
+    original_filing_id: uuid.UUID
+    corrected_filing_id: uuid.UUID
+    party_id: uuid.UUID
+    se_nummer: str
 ```
 
 **`app/events/handlers/filing_handlers.py`**
 ```python
 import logging
 
-from app.events.filing_events import FilingCreated, FilingSubmitted
+from app.events.filing_events import FilingCorrected, FilingCreated, FilingPenaltyAccrued, FilingSubmitted
 
 logger = logging.getLogger(__name__)
 
 
 def on_filing_created(event: FilingCreated) -> None:
     logger.info(
-        "Filing created — filing_id=%s party_id=%s type=%s period=%s",
-        event.filing_id, event.party_id, event.filing_type, event.filing_period,
+        "Filing created: filing_id=%s party_id=%s se=%s period=%s type=%s momstilsvar=%s deadline=%s",
+        event.filing_id, event.party_id, event.se_nummer, event.filing_period,
+        event.angivelse_type, event.momstilsvar, event.frist,
     )
 
 
 def on_filing_submitted(event: FilingSubmitted) -> None:
     logger.info(
-        "Filing submitted — filing_id=%s party_id=%s type=%s period=%s amount=%s",
-        event.filing_id, event.party_id, event.filing_type,
-        event.filing_period, event.total_amount,
+        "Filing submitted: filing_id=%s party_id=%s period=%s amount=%s late_days=%s late_penalty=%s",
+        event.filing_id, event.party_id, event.filing_period,
+        event.momstilsvar, event.late_filing_days, event.late_filing_penalty,
+    )
+
+
+def on_filing_penalty_accrued(event: FilingPenaltyAccrued) -> None:
+    logger.warning(
+        "Late filing penalty accrued: filing_id=%s party_id=%s days=%s penalty=%s",
+        event.filing_id, event.party_id, event.days_overdue, event.penalty_amount,
+    )
+
+
+def on_filing_corrected(event: FilingCorrected) -> None:
+    logger.info(
+        "Filing corrected: original=%s corrected=%s party_id=%s se=%s",
+        event.original_filing_id, event.corrected_filing_id, event.party_id, event.se_nummer,
     )
 ```
 
@@ -964,7 +1130,7 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.dependencies.auth import get_current_user, require_role
+from app.dependencies.auth import get_current_user
 from app.models.user import User
 from app.schemas.filing import FilingCreate, FilingRead
 from app.services.filing import FilingService
@@ -980,9 +1146,9 @@ def get_filing_service() -> FilingService:
 async def create_filing(
     payload: FilingCreate, db: Session = Depends(get_db),
     service: FilingService = Depends(get_filing_service),
-    _: User = Depends(require_role("TAXPAYER", "OFFICER", "ADMIN")),
+    current_user: User = Depends(get_current_user),
 ) -> FilingRead:
-    filing = await service.create_filing(payload, db)
+    filing = await service.create_filing(payload, current_user, db)
     return FilingRead.from_orm(filing)
 
 
@@ -990,9 +1156,9 @@ async def create_filing(
 async def get_filing(
     filing_id: uuid.UUID, db: Session = Depends(get_db),
     service: FilingService = Depends(get_filing_service),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> FilingRead:
-    filing = await service.get_filing(filing_id, db)
+    filing = await service.get_filing(filing_id, current_user, db)
     return FilingRead.from_orm(filing)
 
 
@@ -1000,9 +1166,19 @@ async def get_filing(
 async def list_party_filings(
     party_id: uuid.UUID, db: Session = Depends(get_db),
     service: FilingService = Depends(get_filing_service),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> list[FilingRead]:
-    filings = await service.list_filings_for_party(party_id, db)
+    filings = await service.list_filings_for_party(party_id, current_user, db)
+    return [FilingRead.from_orm(f) for f in filings]
+
+
+@router.get("/filings", response_model=list[FilingRead])
+async def list_filings(
+    db: Session = Depends(get_db),
+    service: FilingService = Depends(get_filing_service),
+    current_user: User = Depends(get_current_user),
+) -> list[FilingRead]:
+    filings = await service.list_filings(current_user, db)
     return [FilingRead.from_orm(f) for f in filings]
 
 
@@ -1010,9 +1186,19 @@ async def list_party_filings(
 async def submit_filing(
     filing_id: uuid.UUID, db: Session = Depends(get_db),
     service: FilingService = Depends(get_filing_service),
-    _: User = Depends(require_role("TAXPAYER", "OFFICER", "ADMIN")),
+    current_user: User = Depends(get_current_user),
 ) -> FilingRead:
-    filing = await service.submit_filing(filing_id, db)
+    filing = await service.submit_filing(filing_id, current_user, db)
+    return FilingRead.from_orm(filing)
+
+
+@router.post("/filings/{filing_id}/correct", response_model=FilingRead)
+async def correct_filing(
+    filing_id: uuid.UUID, payload: FilingCreate, db: Session = Depends(get_db),
+    service: FilingService = Depends(get_filing_service),
+    current_user: User = Depends(get_current_user),
+) -> FilingRead:
+    filing = await service.correct_filing(filing_id, payload, current_user, db)
     return FilingRead.from_orm(filing)
 ```
 
@@ -1022,7 +1208,7 @@ async def submit_filing(
 
 ### 4.1 Overview
 
-A `TaxAssessment` is created by an OFFICER or ADMIN after reviewing a submitted filing. Subscribes to `FilingSubmitted`.
+A `TaxAssessment` is created by an OFFICER or ADMIN after reviewing a submitted filing. Filing status side effects are governed only by the canonical transition table in Section 3.1.1.
 
 | Filing (new) | Assessment (new) |
 |---|---|
@@ -1039,9 +1225,10 @@ A `TaxAssessment` is created by an OFFICER or ADMIN after reviewing a submitted 
 **`app/models/assessment.py`**
 ```python
 import uuid
+from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import ForeignKey, Numeric, String, Text
+from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -1060,29 +1247,38 @@ class TaxAssessment(Base, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"),
         nullable=False, index=True,
     )
-    assessment_date: Mapped[str] = mapped_column(String(20), nullable=False)
+    assessment_date: Mapped[date] = mapped_column(Date, nullable=False)
+    decision_outcome: Mapped[str] = mapped_column(String(30), nullable=False, default="ACCEPTED")
+    # Values: ACCEPTED | ADJUSTED | REJECTED
+
     tax_due: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
-    penalties: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
+    surcharge_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
+    interest_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
+
+    payment_deadline: Mapped[date] = mapped_column(Date, nullable=False)
+    appeal_deadline: Mapped[date] = mapped_column(Date, nullable=False)
+    appealed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="PENDING")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 ```
 
-**Status transitions:**
+**Assessment status transitions (SSOT-aligned):**
 
 | From | Allowed transitions |
 |---|---|
-| `PENDING` | `COMPLETE`, `APPEALED` |
+| `PENDING` | `COMPLETE` |
 | `COMPLETE` | `APPEALED` |
-| `APPEALED` | (terminal) |
+| `APPEALED` | `COMPLETE` |
 
-`filing_id` carries a UNIQUE constraint — one assessment per filing only. Duplicate returns HTTP 409.
+`filing_id` carries a UNIQUE constraint: one active assessment per filing version. Duplicate returns `409`.
 
 ### 4.3 Pydantic Schemas
 
 **`app/schemas/assessment.py`**
 ```python
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, Field
@@ -1090,14 +1286,22 @@ from pydantic import BaseModel, Field
 
 class AssessmentCreate(BaseModel):
     filing_id: uuid.UUID
-    assessment_date: str = Field(..., examples=["2024-03-15"])
+    assessment_date: date = Field(..., examples=["2024-03-15"])
+    decision_outcome: str = Field(default="ACCEPTED")
     tax_due: Decimal = Field(..., examples=[Decimal("5000.00")])
-    penalties: Decimal = Field(default=Decimal("0.00"))
+    surcharge_amount: Decimal = Field(default=Decimal("0.00"))
+    interest_amount: Decimal = Field(default=Decimal("0.00"))
+    payment_deadline: date = Field(..., examples=["2024-04-10"])
+    appeal_deadline: date = Field(..., examples=["2024-06-15"])
     notes: str | None = None
 
 
 class AssessmentStatusUpdate(BaseModel):
     status: str = Field(..., examples=["COMPLETE"])
+
+
+class AssessmentAppealCreate(BaseModel):
+    reason: str = Field(..., min_length=10)
 
 
 class AssessmentRead(BaseModel):
@@ -1106,22 +1310,18 @@ class AssessmentRead(BaseModel):
     id: uuid.UUID
     filing_id: uuid.UUID
     assessed_by: uuid.UUID
-    assessment_date: str
+    assessment_date: date
+    decision_outcome: str
     tax_due: Decimal
-    penalties: Decimal
+    surcharge_amount: Decimal
+    interest_amount: Decimal
+    payment_deadline: date
+    appeal_deadline: date
+    appealed_at: datetime | None
     status: str
     notes: str | None
     created_at: datetime
     updated_at: datetime
-
-    @classmethod
-    def from_orm(cls, obj) -> "AssessmentRead":
-        return cls(
-            id=obj.id, filing_id=obj.filing_id, assessed_by=obj.assessed_by,
-            assessment_date=obj.assessment_date, tax_due=obj.tax_due,
-            penalties=obj.penalties, status=obj.status, notes=obj.notes,
-            created_at=obj.created_at, updated_at=obj.updated_at,
-        )
 ```
 
 ### 4.4 Repository
@@ -1129,11 +1329,12 @@ class AssessmentRead(BaseModel):
 **`app/repositories/assessment.py`**
 ```python
 import uuid
+from datetime import datetime
 
 from sqlalchemy.orm import Session
 
 from app.models.assessment import TaxAssessment
-from app.schemas.assessment import AssessmentCreate
+from app.schemas.assessment import AssessmentAppealCreate, AssessmentCreate
 
 
 class AssessmentRepository:
@@ -1141,12 +1342,21 @@ class AssessmentRepository:
     def create_assessment(self, payload: AssessmentCreate, assessed_by: uuid.UUID, db: Session) -> TaxAssessment:
         assessment = TaxAssessment(
             filing_id=payload.filing_id, assessed_by=assessed_by,
-            assessment_date=payload.assessment_date, tax_due=payload.tax_due,
-            penalties=payload.penalties, status="PENDING", notes=payload.notes,
+            assessment_date=payload.assessment_date,
+            decision_outcome=payload.decision_outcome,
+            tax_due=payload.tax_due,
+            surcharge_amount=payload.surcharge_amount,
+            interest_amount=payload.interest_amount,
+            payment_deadline=payload.payment_deadline,
+            appeal_deadline=payload.appeal_deadline,
+            status="PENDING", notes=payload.notes,
         )
         db.add(assessment)
         db.commit()
-        return self.get_assessment_by_id(assessment.id, db)  # type: ignore[return-value]
+        return assessment
+
+    def list_assessments(self, db: Session) -> list[TaxAssessment]:
+        return db.query(TaxAssessment).order_by(TaxAssessment.created_at.desc()).all()
 
     def get_assessment_by_id(self, assessment_id: uuid.UUID, db: Session) -> TaxAssessment | None:
         return db.query(TaxAssessment).filter(TaxAssessment.id == assessment_id).first()
@@ -1160,7 +1370,17 @@ class AssessmentRepository:
             return None
         assessment.status = new_status
         db.commit()
-        return self.get_assessment_by_id(assessment_id, db)
+        return assessment
+
+    def mark_appealed(self, assessment_id: uuid.UUID, payload: AssessmentAppealCreate, ts: datetime, db: Session) -> TaxAssessment | None:
+        assessment = db.query(TaxAssessment).filter(TaxAssessment.id == assessment_id).first()
+        if assessment is None:
+            return None
+        assessment.status = "APPEALED"
+        assessment.appealed_at = ts
+        assessment.notes = (assessment.notes or "") + f"\nAppeal: {payload.reason}"
+        db.commit()
+        return assessment
 ```
 
 ### 4.5 Service
@@ -1168,51 +1388,96 @@ class AssessmentRepository:
 **`app/services/assessment.py`**
 ```python
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.events.assessment_events import AssessmentCompleted, AssessmentCreated
+from app.events.assessment_events import AssessmentCreated, AssessmentPenaltyCalculated, AssessmentStatusChanged
 from app.events.base import EventBus
 from app.models.assessment import TaxAssessment
 from app.repositories.assessment import AssessmentRepository
-from app.schemas.assessment import AssessmentCreate
+from app.repositories.filing import FilingRepository
+from app.schemas.assessment import AssessmentAppealCreate, AssessmentCreate
+from app.services.authz import AuthorizationPolicy
 
 VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
-    "PENDING":  {"COMPLETE", "APPEALED"},
+    "PENDING": {"COMPLETE"},
     "COMPLETE": {"APPEALED"},
-    "APPEALED": set(),
+    "APPEALED": {"COMPLETE"},
 }
 
 
 class AssessmentService:
-    def __init__(self, repo: AssessmentRepository, bus: EventBus) -> None:
+    def __init__(
+        self,
+        repo: AssessmentRepository,
+        filing_repo: FilingRepository,
+        bus: EventBus,
+        authz: AuthorizationPolicy,
+    ) -> None:
         self._repo = repo
+        self._filing_repo = filing_repo
         self._bus = bus
+        self._authz = authz
 
-    async def create_assessment(self, payload: AssessmentCreate, assessed_by: uuid.UUID, db: Session) -> TaxAssessment:
+    async def create_assessment(self, payload: AssessmentCreate, assessed_by: uuid.UUID, current_user, db: Session) -> TaxAssessment:
+        self._authz.assert_can_create_assessment(current_user)
+        filing = self._filing_repo.get_filing_by_id(payload.filing_id, db)
+        if filing is None:
+            raise HTTPException(status_code=404, detail="Filing not found")
+        if filing.status != "SUBMITTED":
+            raise HTTPException(status_code=400, detail="Assessment can only be created for SUBMITTED filings")
+
         existing = self._repo.get_assessment_by_filing(payload.filing_id, db)
         if existing is not None:
             raise HTTPException(status_code=409, detail=f"Assessment already exists for filing {payload.filing_id}")
+
+        if payload.payment_deadline < payload.assessment_date:
+            raise HTTPException(status_code=422, detail="payment_deadline must be >= assessment_date")
+        if payload.appeal_deadline < payload.assessment_date:
+            raise HTTPException(status_code=422, detail="appeal_deadline must be >= assessment_date")
+
         assessment = self._repo.create_assessment(payload, assessed_by, db)
+        filing.status = "ACCEPTED"
+        db.commit()
+
         await self._bus.publish(AssessmentCreated(
-            assessment_id=assessment.id, filing_id=assessment.filing_id, assessed_by=assessment.assessed_by,
+            assessment_id=assessment.id,
+            filing_id=assessment.filing_id,
+            assessed_by=assessment.assessed_by,
+            filing_previous_status="SUBMITTED",
+            filing_new_status="ACCEPTED",
+        ))
+        await self._bus.publish(AssessmentPenaltyCalculated(
+            assessment_id=assessment.id,
+            filing_id=assessment.filing_id,
+            surcharge_amount=assessment.surcharge_amount,
+            interest_amount=assessment.interest_amount,
+            payment_deadline=assessment.payment_deadline,
         ))
         return assessment
 
-    async def get_assessment(self, assessment_id: uuid.UUID, db: Session) -> TaxAssessment:
+    async def list_assessments(self, current_user, db: Session) -> list[TaxAssessment]:
+        all_items = self._repo.list_assessments(db)
+        return [a for a in all_items if self._authz.can_read_assessment(current_user, a)]
+
+    async def get_assessment(self, assessment_id: uuid.UUID, current_user, db: Session) -> TaxAssessment:
         assessment = self._repo.get_assessment_by_id(assessment_id, db)
         if assessment is None:
             raise HTTPException(status_code=404, detail="Assessment not found")
+        self._authz.assert_can_read_assessment(current_user, assessment)
         return assessment
 
-    async def get_assessment_for_filing(self, filing_id: uuid.UUID, db: Session) -> TaxAssessment:
+    async def get_assessment_for_filing(self, filing_id: uuid.UUID, current_user, db: Session) -> TaxAssessment:
         assessment = self._repo.get_assessment_by_filing(filing_id, db)
         if assessment is None:
             raise HTTPException(status_code=404, detail=f"No assessment found for filing {filing_id}")
+        self._authz.assert_can_read_assessment(current_user, assessment)
         return assessment
 
-    async def update_status(self, assessment_id: uuid.UUID, new_status: str, db: Session) -> TaxAssessment:
+    async def update_status(self, assessment_id: uuid.UUID, new_status: str, current_user, db: Session) -> TaxAssessment:
+        self._authz.assert_can_manage_assessment(current_user)
         assessment = self._repo.get_assessment_by_id(assessment_id, db)
         if assessment is None:
             raise HTTPException(status_code=404, detail="Assessment not found")
@@ -1222,12 +1487,47 @@ class AssessmentService:
                 status_code=400,
                 detail=f"Cannot transition from '{assessment.status}' to '{new_status}'. Allowed: {sorted(allowed) if allowed else 'none'}",
             )
+        previous = assessment.status
         assessment = self._repo.update_status(assessment_id, new_status, db)
+
+        filing = self._filing_repo.get_filing_by_id(assessment.filing_id, db)
+        filing_new_status = filing.status
         if new_status == "COMPLETE":
-            await self._bus.publish(AssessmentCompleted(
-                assessment_id=assessment.id, filing_id=assessment.filing_id,
-                tax_due=assessment.tax_due, penalties=assessment.penalties,
-            ))
+            filing_new_status = "ACCEPTED" if assessment.decision_outcome == "ACCEPTED" else "REJECTED"
+            filing.status = filing_new_status
+            db.commit()
+
+        await self._bus.publish(AssessmentStatusChanged(
+            assessment_id=assessment.id,
+            filing_id=assessment.filing_id,
+            previous_status=previous,
+            new_status=new_status,
+            filing_new_status=filing_new_status,
+        ))
+        return assessment
+
+    async def appeal_assessment(
+        self, assessment_id: uuid.UUID, payload: AssessmentAppealCreate, current_user, db: Session
+    ) -> TaxAssessment:
+        assessment = await self.get_assessment(assessment_id, current_user, db)
+        self._authz.assert_can_appeal_assessment(current_user, assessment)
+        if assessment.status != "COMPLETE":
+            raise HTTPException(status_code=400, detail="Only COMPLETE assessments can be appealed")
+        if datetime.now(timezone.utc).date() > assessment.appeal_deadline:
+            raise HTTPException(status_code=422, detail="Appeal deadline has passed")
+
+        assessment = self._repo.mark_appealed(assessment_id, payload, datetime.now(timezone.utc), db)
+        filing = self._filing_repo.get_filing_by_id(assessment.filing_id, db)
+        filing.status = "UNDER_REVIEW"
+        db.commit()
+
+        await self._bus.publish(AssessmentStatusChanged(
+            assessment_id=assessment.id,
+            filing_id=assessment.filing_id,
+            previous_status="COMPLETE",
+            new_status="APPEALED",
+            filing_new_status="UNDER_REVIEW",
+        ))
         return assessment
 ```
 
@@ -1236,6 +1536,7 @@ class AssessmentService:
 **`app/events/assessment_events.py`**
 ```python
 import uuid
+from datetime import date
 from decimal import Decimal
 
 from app.events.base import BaseEvent
@@ -1245,20 +1546,31 @@ class AssessmentCreated(BaseEvent):
     assessment_id: uuid.UUID
     filing_id: uuid.UUID
     assessed_by: uuid.UUID
+    filing_previous_status: str
+    filing_new_status: str
 
 
-class AssessmentCompleted(BaseEvent):
+class AssessmentPenaltyCalculated(BaseEvent):
     assessment_id: uuid.UUID
     filing_id: uuid.UUID
-    tax_due: Decimal
-    penalties: Decimal
+    surcharge_amount: Decimal
+    interest_amount: Decimal
+    payment_deadline: date
+
+
+class AssessmentStatusChanged(BaseEvent):
+    assessment_id: uuid.UUID
+    filing_id: uuid.UUID
+    previous_status: str
+    new_status: str
+    filing_new_status: str
 ```
 
 **`app/events/handlers/assessment_handlers.py`**
 ```python
 import logging
 
-from app.events.assessment_events import AssessmentCompleted, AssessmentCreated
+from app.events.assessment_events import AssessmentCreated, AssessmentPenaltyCalculated, AssessmentStatusChanged
 from app.events.filing_events import FilingSubmitted
 
 logger = logging.getLogger(__name__)
@@ -1266,22 +1578,32 @@ logger = logging.getLogger(__name__)
 
 def on_filing_submitted_notify_assessment(event: FilingSubmitted) -> None:
     logger.info(
-        "Filing awaiting assessment — filing_id=%s party_id=%s type=%s period=%s amount=%s",
-        event.filing_id, event.party_id, event.filing_type, event.filing_period, event.total_amount,
+        "Filing awaiting assessment: filing_id=%s party_id=%s type=%s period=%s amount=%s",
+        event.filing_id, event.party_id, event.angivelse_type, event.filing_period, event.momstilsvar,
     )
 
 
 def on_assessment_created(event: AssessmentCreated) -> None:
     logger.info(
-        "Assessment created — assessment_id=%s filing_id=%s assessed_by=%s",
+        "Assessment created: assessment_id=%s filing_id=%s assessed_by=%s filing=%s->%s",
         event.assessment_id, event.filing_id, event.assessed_by,
+        event.filing_previous_status, event.filing_new_status,
     )
 
 
-def on_assessment_completed(event: AssessmentCompleted) -> None:
+def on_assessment_penalty_calculated(event: AssessmentPenaltyCalculated) -> None:
     logger.info(
-        "Assessment completed — assessment_id=%s filing_id=%s tax_due=%s penalties=%s",
-        event.assessment_id, event.filing_id, event.tax_due, event.penalties,
+        "Assessment penalties: assessment_id=%s filing_id=%s surcharge=%s interest=%s payment_deadline=%s",
+        event.assessment_id, event.filing_id,
+        event.surcharge_amount, event.interest_amount, event.payment_deadline,
+    )
+
+
+def on_assessment_status_changed(event: AssessmentStatusChanged) -> None:
+    logger.info(
+        "Assessment status changed: assessment_id=%s filing_id=%s %s->%s filing_status=%s",
+        event.assessment_id, event.filing_id,
+        event.previous_status, event.new_status, event.filing_new_status,
     )
 ```
 
@@ -1297,7 +1619,12 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.dependencies.auth import get_current_user, require_role
 from app.models.user import User
-from app.schemas.assessment import AssessmentCreate, AssessmentRead, AssessmentStatusUpdate
+from app.schemas.assessment import (
+    AssessmentAppealCreate,
+    AssessmentCreate,
+    AssessmentRead,
+    AssessmentStatusUpdate,
+)
 from app.services.assessment import AssessmentService
 
 router = APIRouter(prefix="/api/v1/assessments", tags=["assessments"])
@@ -1314,17 +1641,27 @@ async def create_assessment(
     service: AssessmentService = Depends(get_assessment_service),
     current_user: User = Depends(require_role("OFFICER", "ADMIN")),
 ) -> AssessmentRead:
-    assessment = await service.create_assessment(payload, current_user.id, db)
+    assessment = await service.create_assessment(payload, current_user.id, current_user, db)
     return AssessmentRead.from_orm(assessment)
+
+
+@router.get("", response_model=list[AssessmentRead])
+async def list_assessments(
+    db: Session = Depends(get_db),
+    service: AssessmentService = Depends(get_assessment_service),
+    current_user: User = Depends(get_current_user),
+) -> list[AssessmentRead]:
+    assessments = await service.list_assessments(current_user, db)
+    return [AssessmentRead.from_orm(a) for a in assessments]
 
 
 @router.get("/{assessment_id}", response_model=AssessmentRead)
 async def get_assessment(
     assessment_id: uuid.UUID, db: Session = Depends(get_db),
     service: AssessmentService = Depends(get_assessment_service),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> AssessmentRead:
-    assessment = await service.get_assessment(assessment_id, db)
+    assessment = await service.get_assessment(assessment_id, current_user, db)
     return AssessmentRead.from_orm(assessment)
 
 
@@ -1333,9 +1670,20 @@ async def update_assessment_status(
     assessment_id: uuid.UUID, payload: AssessmentStatusUpdate,
     db: Session = Depends(get_db),
     service: AssessmentService = Depends(get_assessment_service),
-    _: User = Depends(require_role("OFFICER", "ADMIN")),
+    current_user: User = Depends(require_role("OFFICER", "ADMIN")),
 ) -> AssessmentRead:
-    assessment = await service.update_status(assessment_id, payload.status, db)
+    assessment = await service.update_status(assessment_id, payload.status, current_user, db)
+    return AssessmentRead.from_orm(assessment)
+
+
+@router.post("/{assessment_id}/appeal", response_model=AssessmentRead)
+async def appeal_assessment(
+    assessment_id: uuid.UUID, payload: AssessmentAppealCreate,
+    db: Session = Depends(get_db),
+    service: AssessmentService = Depends(get_assessment_service),
+    current_user: User = Depends(require_role("TAXPAYER")),
+) -> AssessmentRead:
+    assessment = await service.appeal_assessment(assessment_id, payload, current_user, db)
     return AssessmentRead.from_orm(assessment)
 
 
@@ -1343,9 +1691,9 @@ async def update_assessment_status(
 async def get_filing_assessment(
     filing_id: uuid.UUID, db: Session = Depends(get_db),
     service: AssessmentService = Depends(get_assessment_service),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> AssessmentRead:
-    assessment = await service.get_assessment_for_filing(filing_id, db)
+    assessment = await service.get_assessment_for_filing(filing_id, current_user, db)
     return AssessmentRead.from_orm(assessment)
 ```
 
@@ -1358,28 +1706,38 @@ import logging
 
 from fastapi import FastAPI
 
-from app.events.assessment_events import AssessmentCompleted, AssessmentCreated
+from app.events.assessment_events import AssessmentCreated, AssessmentPenaltyCalculated, AssessmentStatusChanged
 from app.events.bus import InMemoryEventBus
-from app.events.filing_events import FilingCreated, FilingSubmitted
+from app.events.filing_events import FilingCorrected, FilingCreated, FilingPenaltyAccrued, FilingSubmitted
 from app.events.handlers.assessment_handlers import (
-    on_assessment_completed, on_assessment_created,
+    on_assessment_created,
+    on_assessment_penalty_calculated,
+    on_assessment_status_changed,
     on_filing_submitted_notify_assessment,
 )
-from app.events.handlers.filing_handlers import on_filing_created, on_filing_submitted
+from app.events.handlers.filing_handlers import (
+    on_filing_corrected,
+    on_filing_created,
+    on_filing_penalty_accrued,
+    on_filing_submitted,
+)
 from app.events.handlers.party_handlers import on_party_registered, on_party_role_assigned
 from app.events.party_events import PartyRegistered, PartyRoleAssigned
 from app.repositories.assessment import AssessmentRepository
 from app.repositories.filing import FilingRepository
 from app.repositories.party import PartyRepository
-from app.routers import parties, roles
 from app.routers import auth as auth_module
+from app.routers import parties, roles
+from app.routers.admin import settings_router, users_router
 from app.routers.assessments import (
-    filing_assessment_router, get_assessment_service,
+    filing_assessment_router,
+    get_assessment_service,
     router as assessments_router,
 )
 from app.routers.filings import get_filing_service, router as filings_router
 from app.routers.parties import get_party_service
 from app.services.assessment import AssessmentService
+from app.services.authz import AuthorizationPolicy
 from app.services.filing import FilingService
 from app.services.party import PartyService
 
@@ -1388,10 +1746,10 @@ logging.basicConfig(level=logging.INFO)
 app = FastAPI(
     title="Danish Tax Administration Platform",
     version="2.0.0",
-    description="Registration, Filing, and Assessment modules.",
+    description="Registration, Filing, Assessment, and Admin modules.",
 )
 
-# ── Event Bus ─────────────────────────────────────────────────────────────────
+# Event Bus
 bus = InMemoryEventBus()
 
 bus.subscribe(PartyRegistered, on_party_registered)
@@ -1399,26 +1757,38 @@ bus.subscribe(PartyRoleAssigned, on_party_role_assigned)
 bus.subscribe(FilingCreated, on_filing_created)
 bus.subscribe(FilingSubmitted, on_filing_submitted)
 bus.subscribe(FilingSubmitted, on_filing_submitted_notify_assessment)
+bus.subscribe(FilingPenaltyAccrued, on_filing_penalty_accrued)
+bus.subscribe(FilingCorrected, on_filing_corrected)
 bus.subscribe(AssessmentCreated, on_assessment_created)
-bus.subscribe(AssessmentCompleted, on_assessment_completed)
+bus.subscribe(AssessmentPenaltyCalculated, on_assessment_penalty_calculated)
+bus.subscribe(AssessmentStatusChanged, on_assessment_status_changed)
 
-# ── Services ──────────────────────────────────────────────────────────────────
-party_service    = PartyService(repo=PartyRepository(), bus=bus)
-filing_service   = FilingService(repo=FilingRepository(), bus=bus)
-assessment_service = AssessmentService(repo=AssessmentRepository(), bus=bus)
+# Services
+authz = AuthorizationPolicy()
+party_service = PartyService(repo=PartyRepository(), bus=bus)
+filing_repo = FilingRepository()
+filing_service = FilingService(repo=filing_repo, bus=bus, authz=authz)
+assessment_service = AssessmentService(
+    repo=AssessmentRepository(),
+    filing_repo=filing_repo,
+    bus=bus,
+    authz=authz,
+)
 
-# ── Dependency Overrides ──────────────────────────────────────────────────────
-app.dependency_overrides[get_party_service]      = lambda: party_service
-app.dependency_overrides[get_filing_service]     = lambda: filing_service
+# Dependency Overrides
+app.dependency_overrides[get_party_service] = lambda: party_service
+app.dependency_overrides[get_filing_service] = lambda: filing_service
 app.dependency_overrides[get_assessment_service] = lambda: assessment_service
 
-# ── Routers ───────────────────────────────────────────────────────────────────
+# Routers
 app.include_router(auth_module.router)
 app.include_router(parties.router)
 app.include_router(roles.router)
 app.include_router(filings_router)
 app.include_router(assessments_router)
 app.include_router(filing_assessment_router)
+app.include_router(users_router)
+app.include_router(settings_router)
 
 
 @app.get("/health", tags=["health"])
@@ -1439,65 +1809,32 @@ def health() -> dict:
 0002_add_users_table
      |
      v
-0003_add_filings_tables
+0003_add_vat_filing_canonical_table
      |
      v
-0004_add_tax_assessments_table
+0004_add_typed_tax_assessments
+     |
+     v
+0005_add_admin_settings
 ```
 
-### Migration 0002 — `users`
+### Migration 0002 - `users`
 
-**`alembic/versions/0002_add_users_table.py`**
+No schema change from prior draft.
+
+### Migration 0003 - `filings` (canonical VAT fields)
+
+**`alembic/versions/0003_add_vat_filing_canonical_table.py`**
 ```python
-"""add users table
+"""add canonical VAT filing table
 
-Revision ID: 0002
-Revises: 0001
-Create Date: 2026-02-23
+Revision ID: 0003
+Revises: 0002
+Create Date: 2026-02-24
 """
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
-
-revision = "0002"
-down_revision = "0001"
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    op.create_table(
-        "users",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("email", sa.String(255), nullable=False),
-        sa.Column("full_name", sa.String(255), nullable=False),
-        sa.Column("hashed_password", sa.String(255), nullable=False),
-        sa.Column("role", sa.String(50), nullable=False),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index("ix_users_email", "users", ["email"], unique=True)
-
-
-def downgrade() -> None:
-    op.drop_index("ix_users_email", table_name="users")
-    op.drop_table("users")
-```
-
-### Migration 0003 — `filings` and `filing_line_items`
-
-**`alembic/versions/0003_add_filings_tables.py`**
-```python
-"""add filings and filing_line_items tables
-
-Revision ID: 0003
-Revises: 0002
-Create Date: 2026-02-23
-"""
-import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "0003"
@@ -1511,46 +1848,58 @@ def upgrade() -> None:
         "filings",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("party_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("se_nummer", sa.String(8), nullable=False),
+        sa.Column("afregningsperiode_type", sa.String(20), nullable=False),
         sa.Column("filing_period", sa.String(20), nullable=False),
-        sa.Column("filing_type", sa.String(50), nullable=False),
+        sa.Column("angivelse_type", sa.String(20), nullable=False, server_default=sa.text("'MOMS'")),
         sa.Column("status", sa.String(50), nullable=False, server_default=sa.text("'DRAFT'")),
-        sa.Column("total_amount", sa.Numeric(18, 2), nullable=False, server_default=sa.text("0.00")),
+        sa.Column("version", sa.Integer(), nullable=False, server_default=sa.text("1")),
+        sa.Column("rubrik_a", sa.Numeric(18, 2), nullable=False, server_default=sa.text("0.00")),
+        sa.Column("rubrik_b", sa.Numeric(18, 2), nullable=False, server_default=sa.text("0.00")),
+        sa.Column("rubrik_c", sa.Numeric(18, 2), nullable=False, server_default=sa.text("0.00")),
+        sa.Column("rubrik_d", sa.Numeric(18, 2), nullable=False, server_default=sa.text("0.00")),
+        sa.Column("rubrik_e", sa.Numeric(18, 2), nullable=False, server_default=sa.text("0.00")),
+        sa.Column("momspligtig_omsaetning", sa.Numeric(18, 2), nullable=False, server_default=sa.text("0.00")),
+        sa.Column("momsfri_omsaetning", sa.Numeric(18, 2), nullable=False, server_default=sa.text("0.00")),
+        sa.Column("eksport", sa.Numeric(18, 2), nullable=False, server_default=sa.text("0.00")),
+        sa.Column("momstilsvar", sa.Numeric(18, 2), nullable=False, server_default=sa.text("0.00")),
+        sa.Column("frist", sa.Date(), nullable=False),
+        sa.Column("late_filing_days", sa.Integer(), nullable=False, server_default=sa.text("0")),
+        sa.Column("late_filing_penalty", sa.Numeric(18, 2), nullable=False, server_default=sa.text("0.00")),
         sa.Column("submitted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("kvitteringsnummer", sa.String(64), nullable=True),
+        sa.Column("korrektionsangivelse", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+        sa.Column("original_filing_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("supplemental_line_items", sa.JSON(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.ForeignKeyConstraint(["party_id"], ["parties.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["original_filing_id"], ["filings.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "se_nummer", "filing_period", "angivelse_type", "version",
+            name="uq_filing_se_period_type_version",
+        ),
     )
     op.create_index("ix_filings_party_id", "filings", ["party_id"])
-
-    op.create_table(
-        "filing_line_items",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("filing_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("description", sa.Text(), nullable=False),
-        sa.Column("amount", sa.Numeric(18, 2), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.ForeignKeyConstraint(["filing_id"], ["filings.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-    )
+    op.create_index("ix_filings_se_nummer", "filings", ["se_nummer"])
 
 
 def downgrade() -> None:
-    op.drop_table("filing_line_items")
+    op.drop_index("ix_filings_se_nummer", table_name="filings")
     op.drop_index("ix_filings_party_id", table_name="filings")
     op.drop_table("filings")
 ```
 
-### Migration 0004 — `tax_assessments`
+### Migration 0004 - `tax_assessments` (typed dates + penalties)
 
-**`alembic/versions/0004_add_tax_assessments_table.py`**
+**`alembic/versions/0004_add_typed_tax_assessments.py`**
 ```python
-"""add tax_assessments table
+"""add typed tax_assessments table
 
 Revision ID: 0004
 Revises: 0003
-Create Date: 2026-02-23
+Create Date: 2026-02-24
 """
 import sqlalchemy as sa
 from alembic import op
@@ -1568,9 +1917,14 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("filing_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("assessed_by", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("assessment_date", sa.String(20), nullable=False),
+        sa.Column("assessment_date", sa.Date(), nullable=False),
+        sa.Column("decision_outcome", sa.String(30), nullable=False, server_default=sa.text("'ACCEPTED'")),
         sa.Column("tax_due", sa.Numeric(18, 2), nullable=False),
-        sa.Column("penalties", sa.Numeric(18, 2), nullable=False, server_default=sa.text("0.00")),
+        sa.Column("surcharge_amount", sa.Numeric(18, 2), nullable=False, server_default=sa.text("0.00")),
+        sa.Column("interest_amount", sa.Numeric(18, 2), nullable=False, server_default=sa.text("0.00")),
+        sa.Column("payment_deadline", sa.Date(), nullable=False),
+        sa.Column("appeal_deadline", sa.Date(), nullable=False),
+        sa.Column("appealed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("status", sa.String(50), nullable=False, server_default=sa.text("'PENDING'")),
         sa.Column("notes", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
@@ -1590,102 +1944,170 @@ def downgrade() -> None:
     op.drop_table("tax_assessments")
 ```
 
+### Migration 0005 - `admin_settings`
+
+**`alembic/versions/0005_add_admin_settings.py`**
+```python
+"""add admin_settings table
+
+Revision ID: 0005
+Revises: 0004
+Create Date: 2026-02-24
+"""
+import sqlalchemy as sa
+from alembic import op
+
+revision = "0005"
+down_revision = "0004"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "admin_settings",
+        sa.Column("key", sa.String(100), nullable=False),
+        sa.Column("value", sa.JSON(), nullable=False),
+        sa.Column("updated_by", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.PrimaryKeyConstraint("key"),
+    )
+
+
+def downgrade() -> None:
+    op.drop_table("admin_settings")
+```
+
 ### New Tables Summary
 
 | Table | Primary Key | Foreign Keys | Notable Constraints |
 |---|---|---|---|
-| `users` | `id` UUID | — | `email` UNIQUE |
-| `filings` | `id` UUID | `party_id` → `parties.id` CASCADE | index on `party_id` |
-| `filing_line_items` | `id` UUID | `filing_id` → `filings.id` CASCADE | — |
-| `tax_assessments` | `id` UUID | `filing_id` → `filings.id` CASCADE; `assessed_by` → `users.id` SET NULL | `filing_id` UNIQUE |
+| `users` | `id` UUID | - | `email` UNIQUE |
+| `filings` | `id` UUID | `party_id` -> `parties.id` CASCADE; `original_filing_id` -> `filings.id` SET NULL | `uq_filing_se_period_type_version` |
+| `tax_assessments` | `id` UUID | `filing_id` -> `filings.id` CASCADE; `assessed_by` -> `users.id` SET NULL | `filing_id` UNIQUE |
+| `admin_settings` | `key` text | `updated_by` -> `users.id` (logical ref) | one key per setting |
 
 ---
 
 ## 7. Cross-Module Event Flow Diagram
 
-```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                         REGISTRATION MODULE                                  ║
-║  POST /api/v1/parties                                                        ║
-║    └─> PartyService.register_party()                                         ║
-║          ├─> PartyRepository.create_party()      [DB: parties + children]   ║
-║          └─> EventBus.publish(PartyRegistered)                               ║
-║                └─> on_party_registered()         [logs]                     ║
-║  POST /api/v1/parties/{id}/roles                                             ║
-║    └─> PartyService.assign_role()                                            ║
-║          ├─> PartyRepository.create_role()       [DB: party_roles]          ║
-║          └─> EventBus.publish(PartyRoleAssigned)                             ║
-║                └─> on_party_role_assigned()      [logs]                     ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+Event flow is now defined by explicit publish/subscribe contracts (no hidden side effects):
 
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                           FILING MODULE                                      ║
-║  POST /api/v1/filings                                                        ║
-║    └─> FilingService.create_filing()                                         ║
-║          ├─> FilingRepository.create_filing()    [DB: filings + line_items] ║
-║          └─> EventBus.publish(FilingCreated)                                 ║
-║                └─> on_filing_created()           [logs]                     ║
-║  PATCH /api/v1/filings/{id}/submit                                           ║
-║    └─> FilingService.submit_filing()                                         ║
-║          ├─> FilingRepository.submit_filing()    [DB: status=SUBMITTED]     ║
-║          └─> EventBus.publish(FilingSubmitted) ──────────────────────────┐  ║
-║                └─> on_filing_submitted()         [Filing module logs]     │  ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-                                                                           │
-                    FilingSubmitted crosses module boundary                │
-                    via EventBus — Assessment never imports FilingService  │
-                                                                           v
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                        ASSESSMENT MODULE                                     ║
-║  <── FilingSubmitted received                                                ║
-║        └─> on_filing_submitted_notify_assessment() [logs; future: notify]  ║
-║  POST /api/v1/assessments          (OFFICER or ADMIN only)                  ║
-║    └─> AssessmentService.create_assessment()                                 ║
-║          ├─> AssessmentRepository.create_assessment() [DB: tax_assessments] ║
-║          └─> EventBus.publish(AssessmentCreated)                             ║
-║                └─> on_assessment_created()       [logs]                     ║
-║  PATCH /api/v1/assessments/{id}/status  (→ "COMPLETE")                      ║
-║    └─> AssessmentService.update_status()                                     ║
-║          ├─> AssessmentRepository.update_status() [DB: status=COMPLETE]     ║
-║          └─> EventBus.publish(AssessmentCompleted)                           ║
-║                └─> on_assessment_completed()     [logs]                     ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-```
+1. Party registration actions publish `PartyRegistered` and `PartyRoleAssigned`.
+2. Filing draft creation publishes `FilingCreated`.
+3. Filing submission publishes `FilingSubmitted`; if overdue, also `FilingPenaltyAccrued`.
+4. Filing correction publishes `FilingCorrected` and marks prior version `CORRECTED`.
+5. Assessment creation publishes `AssessmentCreated` and `AssessmentPenaltyCalculated`; filing status transitions `SUBMITTED -> ACCEPTED`.
+6. Assessment status updates and appeals publish `AssessmentStatusChanged` with resulting filing status.
 
 ### Event Ownership Table
 
 | Event | Published by | Subscribed by |
 |---|---|---|
-| `PartyRegistered` | `PartyService` | `on_party_registered` (Registration) |
-| `PartyRoleAssigned` | `PartyService` | `on_party_role_assigned` (Registration) |
-| `FilingCreated` | `FilingService` | `on_filing_created` (Filing) |
-| `FilingSubmitted` | `FilingService` | `on_filing_submitted` (Filing) + `on_filing_submitted_notify_assessment` (Assessment) |
-| `AssessmentCreated` | `AssessmentService` | `on_assessment_created` (Assessment) |
-| `AssessmentCompleted` | `AssessmentService` | `on_assessment_completed` (Assessment) |
+| `PartyRegistered` | `PartyService` | `on_party_registered` |
+| `PartyRoleAssigned` | `PartyService` | `on_party_role_assigned` |
+| `FilingCreated` | `FilingService` | `on_filing_created` |
+| `FilingSubmitted` | `FilingService` | `on_filing_submitted`, `on_filing_submitted_notify_assessment` |
+| `FilingPenaltyAccrued` | `FilingService` | `on_filing_penalty_accrued` |
+| `FilingCorrected` | `FilingService` | `on_filing_corrected` |
+| `AssessmentCreated` | `AssessmentService` | `on_assessment_created` |
+| `AssessmentPenaltyCalculated` | `AssessmentService` | `on_assessment_penalty_calculated` |
+| `AssessmentStatusChanged` | `AssessmentService` | `on_assessment_status_changed` |
 
 ---
 
 ## 8. API Contract Summary
 
-| # | Method | Path | Auth | Roles | Request Schema | Response Schema | Code |
-|---|---|---|---|---|---|---|---|
-| 1 | GET | `/health` | No | — | — | `{"status":"ok"}` | 200 |
-| 2 | POST | `/api/v1/auth/login` | No | — | `LoginRequest` | `{"message":"ok"}` + cookies | 200 |
-| 3 | POST | `/api/v1/auth/refresh` | Cookie | — | — | `{"message":"ok"}` + cookies | 200 |
-| 4 | POST | `/api/v1/auth/logout` | No | — | — | `{"message":"ok"}` | 200 |
-| 5 | GET | `/api/v1/auth/me` | Yes | Any | — | `UserRead` | 200 |
-| 6 | POST | `/api/v1/parties` | Yes | A,O,T | `PartyCreate` | `PartyRead` | 201 |
-| 7 | GET | `/api/v1/parties/{id}` | Yes | Any | — | `PartyRead` | 200 |
-| 8 | POST | `/api/v1/parties/{id}/roles` | Yes | A,O,T | `PartyRoleCreate` | `PartyRoleRead` | 201 |
-| 9 | GET | `/api/v1/parties/{id}/roles` | Yes | Any | — | `list[PartyRoleRead]` | 200 |
-| 10 | POST | `/api/v1/filings` | Yes | A,O,T | `FilingCreate` | `FilingRead` | 201 |
-| 11 | GET | `/api/v1/filings/{id}` | Yes | Any | — | `FilingRead` | 200 |
-| 12 | GET | `/api/v1/parties/{id}/filings` | Yes | Any | — | `list[FilingRead]` | 200 |
-| 13 | PATCH | `/api/v1/filings/{id}/submit` | Yes | A,O,T | — | `FilingRead` | 200 |
-| 14 | POST | `/api/v1/assessments` | Yes | A,O | `AssessmentCreate` | `AssessmentRead` | 201 |
-| 15 | GET | `/api/v1/assessments/{id}` | Yes | Any | — | `AssessmentRead` | 200 |
-| 16 | GET | `/api/v1/filings/{id}/assessment` | Yes | Any | — | `AssessmentRead` | 200 |
-| 17 | PATCH | `/api/v1/assessments/{id}/status` | Yes | A,O | `AssessmentStatusUpdate` | `AssessmentRead` | 200 |
+### 8.1 Role and Ownership Policy by Endpoint
+
+Role legend: `A=ADMIN`, `O=OFFICER`, `T=TAXPAYER`
+
+| Method | Path | Roles | Ownership predicate | Failure modes |
+|---|---|---|---|---|
+| GET | `/health` | public | - | 200 |
+| POST | `/api/v1/auth/login` | public | - | 401 invalid credentials |
+| POST | `/api/v1/auth/refresh` | cookie | - | 401 invalid/missing token |
+| POST | `/api/v1/auth/logout` | cookie | - | 200 |
+| GET | `/api/v1/auth/me` | A,O,T | self | 401 |
+| GET | `/api/v1/dashboard/summary` | A,O | all visible for role | 401,403 |
+| GET | `/api/v1/parties` | A,O | all parties | 401,403 |
+| POST | `/api/v1/parties` | A,O | all parties | 401,403,422,409 |
+| GET | `/api/v1/parties/{id}` | A,O,T | T must own party | 401,403,404 |
+| POST | `/api/v1/parties/{id}/roles` | A,O | target party | 401,403,404,422 |
+| GET | `/api/v1/parties/{id}/roles` | A,O,T | T must own party | 401,403,404 |
+| GET | `/api/v1/parties/{id}/filings` | A,O,T | T must own party | 401,403,404 |
+| GET | `/api/v1/filings` | A,O,T | T sees own filings only | 401 |
+| POST | `/api/v1/filings` | A,O,T | T can create only for own party | 401,403,404,422,409 |
+| GET | `/api/v1/filings/{id}` | A,O,T | T must own filing | 401,403,404 |
+| PATCH | `/api/v1/filings/{id}/submit` | A,O,T | T must own filing | 401,403,404,400 |
+| POST | `/api/v1/filings/{id}/correct` | A,O,T | T must own filing | 401,403,404,400,409 |
+| GET | `/api/v1/assessments` | A,O,T | T sees own assessments only | 401 |
+| POST | `/api/v1/assessments` | A,O | filing in submit state | 401,403,404,400,409,422 |
+| GET | `/api/v1/assessments/{id}` | A,O,T | T must own related filing | 401,403,404 |
+| PATCH | `/api/v1/assessments/{id}/status` | A,O | officer/admin only | 401,403,404,400 |
+| POST | `/api/v1/assessments/{id}/appeal` | T | taxpayer must own related filing | 401,403,404,400,422 |
+| GET | `/api/v1/filings/{id}/assessment` | A,O,T | T must own filing | 401,403,404 |
+| GET | `/api/v1/admin/users` | A | admin only | 401,403 |
+| POST | `/api/v1/admin/users` | A | admin only | 401,403,422,409 |
+| PATCH | `/api/v1/admin/users/{id}` | A | admin only | 401,403,404,422 |
+| GET | `/api/v1/admin/settings` | A | admin only | 401,403 |
+| PATCH | `/api/v1/admin/settings/{key}` | A | admin only | 401,403,404,422 |
+
+### 8.2 Deadline and Penalty Enforcement Contract
+
+| Rule | Enforced in | API-visible effect |
+|---|---|---|
+| Filing deadline calculation from period type | `FilingService._compute_deadline` | `FilingRead.frist` always populated |
+| Late filing daily penalty (`DKK 65`, cap `DKK 1,000`) | `FilingService._late_penalty` at submit | `late_filing_days`, `late_filing_penalty` returned and evented |
+| Assessment payment/appeal deadline validity | `AssessmentService.create_assessment` | 422 when `payment_deadline` or `appeal_deadline` invalid |
+| Appeal deadline enforcement | `AssessmentService.appeal_assessment` | 422 when appeal deadline has passed |
+| Distinct surcharge vs interest fields | `TaxAssessment` model and schemas | `surcharge_amount` and `interest_amount` exposed separately |
+
+### 8.3 API Parity Matrix (Design Page/Action -> Backend Contract)
+
+| Page/Action | Endpoint(s) | Auth + ownership | Failure modes |
+|---|---|---|---|
+| Login submit | `POST /api/v1/auth/login` | Public | 401 invalid credentials |
+| Dashboard cards + recent activity | `GET /api/v1/dashboard/summary`, `GET /api/v1/filings`, `GET /api/v1/parties` | A,O only | 401,403 |
+| Parties list/filter | `GET /api/v1/parties` | A,O | 401,403 |
+| Register party | `POST /api/v1/parties` | A,O | 401,403,422,409 |
+| Party detail | `GET /api/v1/parties/{id}` | A,O,T-own | 401,403,404 |
+| Assign role | `POST /api/v1/parties/{id}/roles` | A,O | 401,403,404,422 |
+| Filings list | `GET /api/v1/filings` | A,O all; T own only | 401 |
+| Create filing draft | `POST /api/v1/filings` | A,O,T-own | 401,403,404,422,409 |
+| Submit filing | `PATCH /api/v1/filings/{id}/submit` | A,O,T-own | 401,403,404,400 |
+| Filing detail | `GET /api/v1/filings/{id}` | A,O,T-own | 401,403,404 |
+| Create correction filing | `POST /api/v1/filings/{id}/correct` | A,O,T-own | 401,403,404,400,409 |
+| Assessments list | `GET /api/v1/assessments` | A,O all; T own only | 401 |
+| Create assessment | `POST /api/v1/assessments` | A,O | 401,403,404,400,409,422 |
+| Assessment detail | `GET /api/v1/assessments/{id}` | A,O,T-own | 401,403,404 |
+| Update assessment status | `PATCH /api/v1/assessments/{id}/status` | A,O | 401,403,404,400 |
+| Appeal assessment | `POST /api/v1/assessments/{id}/appeal` | T-own | 401,403,404,400,422 |
+| Admin users page load/manage | `GET/POST/PATCH /api/v1/admin/users...` | A only | 401,403,404,409,422 |
+| Admin settings page load/update | `GET/PATCH /api/v1/admin/settings...` | A only | 401,403,404,422 |
+
+### 8.4 Intentional Deviations from SKAT Benchmark
+
+| Area | SKAT benchmark | Platform decision | Rationale |
+|---|---|---|---|
+| UI language | Danish-first labels/terms | UI mostly English with Danish domain labels in field names and help text | Product decision fixed by owner; reduces implementation ambiguity for mixed-language teams |
+| Internal status codes | Danish terms in UI/process wording | Canonical persistence uses English status enums; UI maps to localized labels | Keeps API contracts stable while allowing localized display |
+| Line-item data | Fixed Rubrik form entry in TastSelv | Optional `supplemental_line_items` allowed but non-canonical | Supports bookkeeping imports without replacing legal Rubrik fields |
+| Admin module | TastSelv does not expose this internal admin model | `/admin/users` and `/admin/settings` in scope now | Required by product owner for operational governance |
+
+### 8.5 Resolved Blockers Checklist (Mapped to Reviewer Findings)
+
+| Reviewer finding | Resolution in this spec |
+|---|---|
+| Filing model mismatch (`FilingLineItem` vs Rubrik fields) | Section 3.2 canonical filing model now uses fixed Rubrik fields; line items are non-canonical optional payload only |
+| Missing admin API coverage (`/admin/users`, `/admin/settings`) | Sections 5 and 8 add admin routers and endpoint contracts |
+| Implicit filing transition on assessment creation | Section 3.1.1 and Section 4.5 define explicit `SUBMITTED -> ACCEPTED` side effect at assessment creation |
+| `assessment_date` string type | Section 4.2 and 4.3 changed to typed `date` fields |
+| Weak ownership policy on Any reads | Section 2.8 and Section 8.1 add explicit row-level ownership predicates and testable failure modes |
+| Missing page/action to endpoint mapping | Section 8.3 parity matrix maps designed actions to endpoints/auth/failures |
+| Deadlines/penalties not enforceable | Sections 3.5, 4.5, and 8.2 define deterministic API/service enforcement contracts |
+| Multi-tax ambiguity in Phase 2 | Section 3.2 hard-constrains `angivelse_type='MOMS'` for Phase 2; non-VAT types explicitly deferred |
+| Event payloads not aligned with canonical filing | Sections 3.6, 4.6, and 7 update event contracts with typed/legal fields |
 
 ---
 
@@ -1693,40 +2115,47 @@ def downgrade() -> None:
 
 ```
 app/
-├── config.py                   MODIFY (add SECRET_KEY + token settings)
-├── main.py                     REPLACE (full replacement, Section 5)
-├── dependencies/
-│   ├── __init__.py             CREATE (empty)
-│   └── auth.py                 CREATE
-├── models/
-│   ├── user.py                 CREATE
-│   ├── filing.py               CREATE
-│   └── assessment.py           CREATE
-├── schemas/
-│   ├── auth.py                 CREATE
-│   ├── filing.py               CREATE
-│   └── assessment.py           CREATE
-├── repositories/
-│   ├── filing.py               CREATE
-│   └── assessment.py           CREATE
-├── services/
-│   ├── filing.py               CREATE
-│   └── assessment.py           CREATE
-├── events/
-│   ├── filing_events.py        CREATE
-│   ├── assessment_events.py    CREATE
-│   └── handlers/
-│       ├── filing_handlers.py      CREATE
-│       └── assessment_handlers.py  CREATE
-└── routers/
-    ├── auth.py                 CREATE
-    ├── filings.py              CREATE
-    └── assessments.py          CREATE
+|- config.py                   MODIFY (add SECRET_KEY + token settings)
+|- main.py                     REPLACE (full replacement, Section 5)
+|- dependencies/
+|  |- __init__.py              CREATE (empty)
+|  `- auth.py                  CREATE
+|- models/
+|  |- user.py                  CREATE
+|  |- filing.py                CREATE (canonical VAT fields)
+|  |- assessment.py            CREATE (typed dates + surcharge/interest)
+|  `- admin_setting.py         CREATE
+|- schemas/
+|  |- auth.py                  CREATE
+|  |- filing.py                CREATE
+|  |- assessment.py            CREATE
+|  `- admin.py                 CREATE
+|- repositories/
+|  |- filing.py                CREATE
+|  |- assessment.py            CREATE
+|  `- admin.py                 CREATE
+|- services/
+|  |- authz.py                 CREATE (ownership policy helpers)
+|  |- filing.py                CREATE
+|  |- assessment.py            CREATE
+|  `- admin.py                 CREATE
+|- events/
+|  |- filing_events.py         CREATE
+|  |- assessment_events.py     CREATE
+|  `- handlers/
+|     |- filing_handlers.py    CREATE
+|     `- assessment_handlers.py CREATE
+`- routers/
+   |- auth.py                  CREATE
+   |- filings.py               CREATE
+   |- assessments.py           CREATE
+   `- admin.py                 CREATE
 
 alembic/versions/
-├── 0002_add_users_table.py             CREATE
-├── 0003_add_filings_tables.py          CREATE
-└── 0004_add_tax_assessments_table.py   CREATE
+|- 0002_add_users_table.py               CREATE
+|- 0003_add_vat_filing_canonical_table.py CREATE
+|- 0004_add_typed_tax_assessments.py     CREATE
+`- 0005_add_admin_settings.py            CREATE
 ```
 
 ## Appendix B: Python Dependency Additions
@@ -1762,37 +2191,122 @@ export interface LoginRequest {
 
 **`types/filing.ts`**
 ```typescript
-export type FilingType   = 'VAT' | 'INCOME_TAX';
-export type FilingStatus = 'DRAFT' | 'SUBMITTED' | 'UNDER_REVIEW' | 'ACCEPTED' | 'REJECTED';
+export type AngivelseType = 'MOMS';
+export type FilingStatus =
+  | 'DRAFT'
+  | 'SUBMITTED'
+  | 'UNDER_REVIEW'
+  | 'ACCEPTED'
+  | 'REJECTED'
+  | 'CORRECTED';
 
-export interface FilingLineItemCreate { description: string; amount: string; }
-export interface FilingLineItemRead extends FilingLineItemCreate {
-  id: string; created_at: string; updated_at: string;
-}
 export interface FilingCreate {
-  party_id: string; filing_period: string; filing_type: FilingType;
-  total_amount: string; line_items: FilingLineItemCreate[];
+  party_id: string;
+  se_nummer: string;
+  afregningsperiode_type: 'MONTHLY' | 'QUARTERLY' | 'SEMI_ANNUAL';
+  filing_period: string;
+  angivelse_type: AngivelseType;
+  rubrik_a: string;
+  rubrik_b: string;
+  rubrik_c: string;
+  rubrik_d: string;
+  rubrik_e: string;
+  momspligtig_omsaetning: string;
+  momsfri_omsaetning: string;
+  eksport: string;
+  supplemental_line_items?: Array<Record<string, unknown>>;
 }
+
 export interface FilingRead {
-  id: string; party_id: string; filing_period: string; filing_type: FilingType;
-  status: FilingStatus; total_amount: string; submitted_at: string | null;
-  line_items: FilingLineItemRead[]; created_at: string; updated_at: string;
+  id: string;
+  party_id: string;
+  se_nummer: string;
+  afregningsperiode_type: 'MONTHLY' | 'QUARTERLY' | 'SEMI_ANNUAL';
+  filing_period: string;
+  angivelse_type: AngivelseType;
+  status: FilingStatus;
+  version: number;
+  rubrik_a: string;
+  rubrik_b: string;
+  rubrik_c: string;
+  rubrik_d: string;
+  rubrik_e: string;
+  momspligtig_omsaetning: string;
+  momsfri_omsaetning: string;
+  eksport: string;
+  momstilsvar: string;
+  frist: string; // YYYY-MM-DD
+  late_filing_days: number;
+  late_filing_penalty: string;
+  submitted_at: string | null;
+  kvitteringsnummer: string | null;
+  korrektionsangivelse: boolean;
+  original_filing_id: string | null;
+  supplemental_line_items: Array<Record<string, unknown>> | null;
+  created_at: string;
+  updated_at: string;
 }
 ```
 
 **`types/assessment.ts`**
 ```typescript
 export type AssessmentStatus = 'PENDING' | 'COMPLETE' | 'APPEALED';
+export type AssessmentOutcome = 'ACCEPTED' | 'ADJUSTED' | 'REJECTED';
 
 export interface AssessmentCreate {
-  filing_id: string; assessment_date: string; tax_due: string;
-  penalties: string; notes?: string;
+  filing_id: string;
+  assessment_date: string; // YYYY-MM-DD
+  decision_outcome: AssessmentOutcome;
+  tax_due: string;
+  surcharge_amount: string;
+  interest_amount: string;
+  payment_deadline: string; // YYYY-MM-DD
+  appeal_deadline: string; // YYYY-MM-DD
+  notes?: string;
 }
-export interface AssessmentStatusUpdate { status: AssessmentStatus; }
+
+export interface AssessmentStatusUpdate {
+  status: AssessmentStatus;
+}
+
+export interface AssessmentAppealCreate {
+  reason: string;
+}
+
 export interface AssessmentRead {
-  id: string; filing_id: string; assessed_by: string; assessment_date: string;
-  tax_due: string; penalties: string; status: AssessmentStatus;
-  notes: string | null; created_at: string; updated_at: string;
+  id: string;
+  filing_id: string;
+  assessed_by: string;
+  assessment_date: string;
+  decision_outcome: AssessmentOutcome;
+  tax_due: string;
+  surcharge_amount: string;
+  interest_amount: string;
+  payment_deadline: string;
+  appeal_deadline: string;
+  appealed_at: string | null;
+  status: AssessmentStatus;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+```
+
+**`types/admin.ts`**
+```typescript
+export interface AdminUserRead {
+  id: string;
+  email: string;
+  full_name: string;
+  role: 'ADMIN' | 'OFFICER' | 'TAXPAYER';
+  is_active: boolean;
+}
+
+export interface AdminSettingRead {
+  key: string;
+  value: Record<string, unknown> | string | number | boolean | null;
+  updated_by: string | null;
+  updated_at: string;
 }
 ```
 
@@ -1803,3 +2317,10 @@ export interface ValidationError {
   type: string; loc: (string | number)[]; msg: string; input: unknown;
 }
 ```
+
+
+
+
+
+
+
