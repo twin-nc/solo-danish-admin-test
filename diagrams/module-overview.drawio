@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="Electron" modified="2024-01-01T00:00:00.000Z" agent="Claude Code" version="21.0.0">
+  <diagram name="Module Overview" id="module-overview">
+    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title" value="Danish Tax Administration Platform — Module Overview &amp; Agent Build Plan" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=18;fontStyle=1;fontColor=#004B87;" vertex="1" parent="1">
+          <mxGeometry x="100" y="20" width="1400" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== EXISTING MODULES ==================== -->
+        <mxCell id="existing-label" value="EXISTING (14 passing tests)" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontStyle=1;fontSize=13;fontColor=#2d6a2d;" vertex="1" parent="1">
+          <mxGeometry x="60" y="75" width="300" height="25" as="geometry" />
+        </mxCell>
+
+        <!-- Registration Module -->
+        <mxCell id="reg-mod-bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="60" y="110" width="300" height="350" as="geometry" />
+        </mxCell>
+        <mxCell id="reg-mod-title" value="Registration Module" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontStyle=1;fontSize=14;fontColor=#2d6a2d;" vertex="1" parent="1">
+          <mxGeometry x="60" y="115" width="300" height="25" as="geometry" />
+        </mxCell>
+
+        <mxCell id="reg-router" value="routers/parties.py&#xa;5 endpoints" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#82b366;strokeColor=#2d6a2d;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="90" y="150" width="240" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="reg-service" value="services/registration.py&#xa;register_party, get_party&#xa;assign_role, list_roles" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#82b366;strokeColor=#2d6a2d;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="90" y="220" width="240" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="reg-repo" value="repositories/party.py" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#82b366;strokeColor=#2d6a2d;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="90" y="310" width="240" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="reg-models" value="models/party.py&#xa;(Party, NaturalPerson, LegalEntity,&#xa; Address, PartyRole + children)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#82b366;strokeColor=#2d6a2d;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="90" y="380" width="240" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== NEW MODULES ==================== -->
+        <mxCell id="new-label" value="NEW — Phase 2 Backend Coder Agent" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontStyle=1;fontSize=13;fontColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="420" y="75" width="820" height="25" as="geometry" />
+        </mxCell>
+
+        <!-- Auth Module -->
+        <mxCell id="auth-mod-bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="420" y="110" width="240" height="350" as="geometry" />
+        </mxCell>
+        <mxCell id="auth-mod-title" value="Auth Module" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontStyle=1;fontSize=14;fontColor=#b85a00;" vertex="1" parent="1">
+          <mxGeometry x="420" y="115" width="240" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="auth-router" value="routers/auth.py&#xa;POST /auth/login&#xa;POST /auth/refresh&#xa;POST /auth/logout" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d6b656;strokeColor=#b85a00;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="445" y="150" width="190" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="auth-service" value="services/auth.py&#xa;create_user, login&#xa;create_token, verify&#xa;refresh_token" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d6b656;strokeColor=#b85a00;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="445" y="250" width="190" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="auth-repo" value="repositories/user.py" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d6b656;strokeColor=#b85a00;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="445" y="360" width="190" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="auth-model" value="models/user.py&#xa;(User: email, role,&#xa; hashed_password)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d6b656;strokeColor=#b85a00;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="445" y="425" width="190" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Filing Module -->
+        <mxCell id="filing-mod-bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="700" y="110" width="260" height="440" as="geometry" />
+        </mxCell>
+        <mxCell id="filing-mod-title" value="Filing Module (Momsangivelse)" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontStyle=1;fontSize=13;fontColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="700" y="115" width="260" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="filing-router2" value="routers/filings.py&#xa;POST /filings&#xa;GET /filings&#xa;GET /filings/{id}&#xa;POST /filings/{id}/submit&#xa;POST /filings/{id}/correct" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b85450;strokeColor=#6c3a38;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="720" y="150" width="220" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="filing-service2" value="services/filing.py&#xa;create_filing&#xa;submit_filing (→ compute momstilsvar)&#xa;list_filings (filtered by party/period)&#xa;korrektionsangivelse" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b85450;strokeColor=#6c3a38;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="720" y="280" width="220" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="filing-repo2" value="repositories/filing.py&#xa;create, get, list, update_status" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b85450;strokeColor=#6c3a38;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="720" y="400" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="filing-model2" value="models/filing.py&#xa;(Filing: Rubrik A-E, momstilsvar,&#xa; frist, kvitteringsnummer,&#xa; korrektionsangivelse)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b85450;strokeColor=#6c3a38;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="720" y="480" width="220" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Assessment Module -->
+        <mxCell id="assess-mod-bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="110" width="260" height="440" as="geometry" />
+        </mxCell>
+        <mxCell id="assess-mod-title" value="Assessment Module (Skatteansættelse)" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontStyle=1;fontSize=12;fontColor=#6e3d9a;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="115" width="260" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="assess-router2" value="routers/assessments.py&#xa;POST /assessments&#xa;GET /assessments&#xa;GET /assessments/{id}&#xa;PATCH /assessments/{id}/status&#xa;POST /assessments/{id}/agterskrivelse" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#9673a6;strokeColor=#6e3d9a;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="150" width="220" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="assess-service2" value="services/assessment.py&#xa;create_assessment&#xa;update_status&#xa;send_agterskrivelse&#xa;list_assessments" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#9673a6;strokeColor=#6e3d9a;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="280" width="220" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="assess-repo2" value="repositories/assessment.py&#xa;create, get, list, update_status" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#9673a6;strokeColor=#6e3d9a;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="400" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="assess-model2" value="models/assessment.py&#xa;(TaxAssessment: filing_id,&#xa; agterskrivelse_sent_at,&#xa; klage_frist, begrundelse)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#9673a6;strokeColor=#6e3d9a;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="480" width="220" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== FRONTEND ==================== -->
+        <mxCell id="fe-label" value="NEW — Phase 2 Frontend Coder Agent" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontStyle=1;fontSize=13;fontColor=#004B87;" vertex="1" parent="1">
+          <mxGeometry x="60" y="590" width="1200" height="25" as="geometry" />
+        </mxCell>
+
+        <mxCell id="fe-mod-bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#004B87;" vertex="1" parent="1">
+          <mxGeometry x="60" y="625" width="1200" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="fe-mod-title" value="Frontend — Next.js 14 App Router + TypeScript + Tailwind CSS (SKAT design language)" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontStyle=1;fontSize=13;fontColor=#004B87;" vertex="1" parent="1">
+          <mxGeometry x="60" y="630" width="1200" height="25" as="geometry" />
+        </mxCell>
+
+        <mxCell id="fe-page-auth" value="app/(auth)/login/&#xa;LoginPage&#xa;JWT HttpOnly" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#004B87;strokeColor=#003366;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="80" y="665" width="160" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="fe-page-dash" value="app/dashboard/&#xa;DashboardPage&#xa;Stats, Recent Activity" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#004B87;strokeColor=#003366;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="260" y="665" width="180" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="fe-page-reg" value="app/registrations/&#xa;Parties List + Detail&#xa;Register, Assign Role" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#004B87;strokeColor=#003366;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="460" y="665" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="fe-page-fil" value="app/filings/&#xa;Filings List + Detail&#xa;Create Momsangivelse&#xa;Submit + Correct" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#004B87;strokeColor=#003366;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="680" y="665" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="fe-page-ass" value="app/assessments/&#xa;Assessments List + Detail&#xa;Status Tracking&#xa;Agterskrivelse" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#004B87;strokeColor=#003366;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="900" y="665" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="fe-lib" value="lib/api-client.ts&#xa;Typed fetch client&#xa;Zustand auth store&#xa;HttpOnly cookies" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1f0f7;strokeColor=#004B87;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="665" width="120" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== PHASE TIMELINE ==================== -->
+        <mxCell id="phase-bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="60" y="860" width="1200" height="260" as="geometry" />
+        </mxCell>
+        <mxCell id="phase-title" value="Multi-Agent Build Timeline" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontStyle=1;fontSize=14;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="80" y="870" width="300" height="25" as="geometry" />
+        </mxCell>
+
+        <!-- Phase 1 -->
+        <mxCell id="p1-bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#004B87;opacity=60;" vertex="1" parent="1">
+          <mxGeometry x="80" y="905" width="340" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="p1-title" value="Phase 1 — COMPLETE" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontStyle=1;fontSize=12;fontColor=#004B87;" vertex="1" parent="1">
+          <mxGeometry x="80" y="910" width="340" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="p1-items" value="✓ Architect Agent → AGENT_ARCHITECT_SPEC.md&#xa;✓ Designer Agent → AGENT_DESIGN_SPEC.md&#xa;  (SKAT visual language, skat.dk reference)&#xa;✓ Researcher Agent → AGENT_RESEARCHER_SPEC.md&#xa;  (Danish VAT law, Momsloven, Rubrik A-E)&#xa;✓ draw.io diagrams → diagrams/" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=11;spacingLeft=5;" vertex="1" parent="1">
+          <mxGeometry x="85" y="935" width="330" height="155" as="geometry" />
+        </mxCell>
+
+        <!-- Phase 2 -->
+        <mxCell id="p2-bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;opacity=60;" vertex="1" parent="1">
+          <mxGeometry x="440" y="905" width="360" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="p2-title" value="Phase 2 — NEXT" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontStyle=1;fontSize=12;fontColor=#b85a00;" vertex="1" parent="1">
+          <mxGeometry x="440" y="910" width="360" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="p2-items" value="→ Backend Coder Agent (parallel):&#xa;   Auth module (JWT, users table)&#xa;   Filing module (Rubrik A-E, momstilsvar)&#xa;   Assessment module (agterskrivelse)&#xa;   Alembic migrations 0002–0005&#xa;→ Frontend Coder Agent (parallel):&#xa;   Next.js scaffold, all pages + API client" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=11;spacingLeft=5;" vertex="1" parent="1">
+          <mxGeometry x="445" y="935" width="350" height="155" as="geometry" />
+        </mxCell>
+
+        <!-- Phase 3 -->
+        <mxCell id="p3-bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;opacity=60;" vertex="1" parent="1">
+          <mxGeometry x="820" y="905" width="360" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="p3-title" value="Phase 3 — LATER" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontStyle=1;fontSize=12;fontColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="820" y="910" width="360" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="p3-items" value="→ Test Agent (parallel):&#xa;   tests/test_filings.py&#xa;   tests/test_assessments.py&#xa;   tests/test_auth.py&#xa;→ Docs Agent (parallel):&#xa;   ARCHITECTURE.md (updated)&#xa;   API_DOCS.md + SETUP.md" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=11;spacingLeft=5;" vertex="1" parent="1">
+          <mxGeometry x="825" y="935" width="350" height="155" as="geometry" />
+        </mxCell>
+
+        <!-- Phase arrows -->
+        <mxCell id="p1-p2-arr" value="" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;startArrow=none;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=#333333;" edge="1" source="p1-bg" target="p2-bg" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p2-p3-arr" value="" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;startArrow=none;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=#333333;" edge="1" source="p2-bg" target="p3-bg" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
