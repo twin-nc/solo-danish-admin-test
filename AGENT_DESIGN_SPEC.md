@@ -5,10 +5,10 @@
 This design spec is aligned to:
 - `AGENT_REVIEWER_SPEC.md` (2026-02-24 quality gate)
 - `AGENT_REVIEW_DESIGNER.md` (designer blockers/actions)
-- `AGENT_RESEARCHER_SPEC.md` SKAT VAT UX benchmark
-- `AGENT_ARCHITECT_SPEC.md` API/state contract (latest in this branch)
+- Latest `AGENT_RESEARCHER_SPEC.md` SKAT VAT benchmark and legal baseline
+- Latest `AGENT_ARCHITECT_SPEC.md` API/state contract
 
-Fixed product decisions are applied as hard constraints:
+Fixed product decisions are hard constraints:
 - Legal accuracy first
 - UI language mostly English
 - Admin pages in scope now
@@ -23,19 +23,19 @@ Fixed product decisions are applied as hard constraints:
 
 ### 1.1 Core Principles
 
-**Authoritative and trustworthy**
+**Authoritative and trustworthy**  
 Visuals remain restrained and government-like. Decisions prioritize legal clarity over decorative styling.
 
-**Clarity over cleverness**
+**Clarity over cleverness**  
 All labels, statuses, and actions are explicit and testable.
 
-**Accessibility by default (WCAG 2.1 AA)**
+**Accessibility by default (WCAG 2.1 AA)**  
 Keyboard-first navigation, sufficient contrast, and text labels with every status color.
 
-**Desktop-first, responsive down to tablet**
+**Desktop-first, responsive down to tablet**  
 Primary users are officers/admins on desktop; tablet support is required; mobile degrades gracefully.
 
-**Legal and workflow traceability**
+**Legal and workflow traceability**  
 Each user action maps to one API entry and one state rule.
 
 ---
@@ -122,10 +122,10 @@ Canonical backend values with English primary labels and Danish legal aliases:
 - `UNDER_REVIEW` -> Under Review (`Under behandling`)
 - `ACCEPTED` -> Accepted (`Godkendt`)
 - `REJECTED` -> Rejected (`Afvist`)
+- `CORRECTED` -> Corrected (`Korrigeret`)
 - `PENDING` -> Pending (`Afventende`)
 - `COMPLETE` -> Complete (`Afsluttet`)
 - `APPEALED` -> Appealed (`Anket`)
-- `IN_BUSINESS` -> Active (`Aktiv`)
 
 ### 3.3 DataTable
 
@@ -161,33 +161,31 @@ Shows API success/error and deterministic failure reasons.
 
 ---
 
-## 4. Contract Baseline and 4C Filing Decision
+## 4. Contract Baseline and 4C Filing Enforcement
 
 ### 4.1 Baseline Contract Sources
 
-- Auth/user contract: Architect Section 2.5 and API summary rows 2-5
-- Party/role contract: API summary rows 6-9 plus existing `app/schemas/party.py` and `app/schemas/party_role.py`
-- Filing contract and state rule: Architect Section 3.3, 3.5, API rows 10-13
-- Assessment contract and state rule: Architect Section 4.3, 4.5, API rows 14-17
+- Architect Section 2.8: authorization and row-level ownership policy
+- Architect Section 3.1.1: filing and assessment SSOT transition table
+- Architect Section 3.2-3.7: canonical filing model, schema, service, router
+- Architect Section 4.2-4.7: assessment model, schema, service, router
+- Architect Section 8.1-8.3: endpoint policy, penalty/deadline contract, API parity matrix
+- Researcher Section 2 and 3: SKAT benchmark workflow and legal baseline
 
-### 4.2 Canonical Filing UX Rule (Product Decision 4C)
+### 4.2 Canonical Filing UX Rule (4C)
 
-Phase 2 filing UI is Rubrik-first with fixed official VAT fields:
-- Rubrik A, B, C, D, E
-- Taxable turnover, VAT-exempt turnover, export
-- Computed `momstilsvar`
+Phase 2 filing UI is fixed-field and Rubrik-first:
+- `rubrik_a`, `rubrik_b`, `rubrik_c`, `rubrik_d`, `rubrik_e`
+- `momspligtig_omsaetning`, `momsfri_omsaetning`, `eksport`
+- Computed and server-trusted `momstilsvar`
+- `angivelse_type` fixed to `MOMS` in Phase 2
 
-Line-item free entry is not offered as primary UX.  
-Current architect payload (`FilingCreate.line_items`) is handled through a deterministic adapter so fixed fields remain primary in UX.
+### 4.3 Non-Canonical Detail Rule
 
-### 4.3 Adapter Rule Until Architect 4C Schema Is Published
-
-UI model `VatFilingForm` is canonical in frontend. API transport maps as:
-- `rubrik_a..rubrik_e` and summary fields -> fixed `line_items[]` descriptions + amounts
-- `momstilsvar` -> `FilingCreate.total_amount`
-- `filing_type` forced to `VAT`
-
-This keeps UX legally aligned now and avoids free-form line-item entry.
+`supplemental_line_items` is optional and non-canonical:
+- Allowed as convenience import detail only
+- Never replaces fixed VAT field entry
+- Manual line-item-first filing interaction is deferred
 
 ---
 
@@ -198,128 +196,90 @@ This keeps UX legally aligned now and avoids free-form line-item entry.
 Scope: `In Scope Phase 2`  
 Endpoints: `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`
 
-Primary components:
-- Email + password form
-- Login submit
-- Session-expired banner tied to refresh failure
-
 ### 5b. Dashboard
 
-Scope: `In Scope Phase 2` (limited)  
-Endpoints: `GET /api/v1/auth/me`, `GET /health`
+Scope: `In Scope Phase 2`  
+Endpoints: `GET /api/v1/dashboard/summary`, `GET /api/v1/filings`, `GET /api/v1/parties`
 
-Primary components:
-- Session card (name/role/active)
-- System health card
-- Quick links to parties, filings, assessments
-
-Deferred widgets:
-- Global aggregate counts (no listing endpoint parity in current architect contract)
+Components:
+- Summary cards (server-provided metrics only)
+- Recent filings table
+- Recent parties table
 
 ### 5c. Parties List
 
-Scope: `Deferred`  
-Reason: no list endpoint in current architect contract (`GET /api/v1/parties` missing)
+Scope: `In Scope Phase 2`  
+Endpoint: `GET /api/v1/parties`
 
 ### 5d. Party Detail
 
 Scope: `In Scope Phase 2`  
 Endpoints: `GET /api/v1/parties/{id}`, `GET /api/v1/parties/{id}/roles`, `POST /api/v1/parties/{id}/roles`
 
-Primary components:
-- Party summary card
-- Identifier/classification/state/contact/name cards
-- Role table and assign-role modal
-
 ### 5e. Register Party
 
 Scope: `In Scope Phase 2`  
 Endpoint: `POST /api/v1/parties`
 
-Primary components:
-- Party type
-- Identifier block (display label "CVR/SE Identifier", backend field still `identifierTypeCL`)
-- Classification/state/contact/name blocks
-- Sticky submit footer
-
 ### 5f. Filings List
 
 Scope: `In Scope Phase 2`  
-Endpoint: `GET /api/v1/parties/{id}/filings`
-
-Primary components:
-- Party-scoped filing table
-- Status filter
-- "Open filing" row action
+Endpoint: `GET /api/v1/filings`
 
 ### 5g. Filing Detail
 
 Scope: `In Scope Phase 2`  
-Endpoints: `GET /api/v1/filings/{id}`, `PATCH /api/v1/filings/{id}/submit`, `GET /api/v1/filings/{id}/assessment`
+Endpoints: `GET /api/v1/filings/{id}`, `PATCH /api/v1/filings/{id}/submit`, `GET /api/v1/filings/{id}/assessment`, `POST /api/v1/filings/{id}/correct`
 
-Primary components:
-- Filing metadata card
-- Fixed VAT field review card (Rubrik groups rendered from deterministic mapping, not free text)
-- State timeline card
-- Assessment linkout card
+Components:
+- Filing metadata (`status`, `version`, period, `se_nummer`, `submitted_at`)
+- Fixed VAT field review card
+- Receipt panel (`kvitteringsnummer` when present)
+- Deadline and late penalty panel (`frist`, `late_filing_days`, `late_filing_penalty`)
+- Correction action (eligible statuses only)
 
 ### 5h. Create Filing (Rubrik-first)
 
 Scope: `In Scope Phase 2`  
-Endpoint: `POST /api/v1/filings` then `PATCH /api/v1/filings/{id}/submit`
+Endpoint: `POST /api/v1/filings`
 
-Primary components:
-- Step 1: Party and filing period
-- Step 2: Fixed VAT fields (Rubrik A-E)
-- Step 3: Turnover fields + computed `momstilsvar`
-- Step 4: Declaration + submit
+Workflow pattern aligned to SKAT benchmark:
+- Step 1: party + `se_nummer` + period type + period
+- Step 2: fixed VAT fields (`rubrik_a` to `rubrik_e`)
+- Step 3: turnover fields and computed preview
+- Step 4: declaration and save as draft
+- Step 5: submit from detail (`PATCH /filings/{id}/submit`)
 
-Validation:
-- Required fields enforce numeric >= 0
-- `momstilsvar = A + C + E - B`
-- API errors displayed verbatim for legal audit trace
+Validation and help behavior:
+- Required marker on mandatory fields
+- Inline helper tooltip per field
+- Zero filing is valid
+- Final submission blocked if API validation fails
 
 ### 5i. Assessments List
 
-Scope: `Deferred`  
-Reason: no list endpoint in current architect contract (`GET /api/v1/assessments` missing)
+Scope: `In Scope Phase 2`  
+Endpoint: `GET /api/v1/assessments`
 
 ### 5j. Assessment Detail
 
 Scope: `In Scope Phase 2`  
-Endpoints: `GET /api/v1/assessments/{id}`, `PATCH /api/v1/assessments/{id}/status`
+Endpoints: `GET /api/v1/assessments/{id}`, `PATCH /api/v1/assessments/{id}/status`, `POST /api/v1/assessments/{id}/appeal`
 
-Primary components:
-- Assessment metadata
-- Tax due and penalties card
-- Notes/begrundelse card
-- Status transition controls (officer/admin only)
+Components:
+- Assessment core fields (`decision_outcome`, `tax_due`, `surcharge_amount`, `interest_amount`)
+- Deadline fields (`payment_deadline`, `appeal_deadline`)
+- Appeal action for taxpayer-owned filings only
 
 ### 5k. Admin Users
 
-Scope: `In Scope Phase 2` (endpoint-backed subset only)  
-Endpoints: `GET /api/v1/auth/me`, `POST /api/v1/auth/logout`
-
-In-scope components:
-- Current admin session card
-- Role policy reference card
-- Sign-out action
-
-Deferred components:
-- User search/create/update/deactivate (no `/admin/users` API contract yet)
+Scope: `In Scope Phase 2`  
+Endpoints: `GET /api/v1/admin/users`, `POST /api/v1/admin/users`, `PATCH /api/v1/admin/users/{id}`
 
 ### 5l. Admin Settings
 
-Scope: `In Scope Phase 2` (endpoint-backed subset only)  
-Endpoints: `GET /health`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`
-
-In-scope components:
-- Health status panel
-- Session token status panel
-- Refresh session action
-
-Deferred components:
-- Writable platform settings (no `/admin/settings` API contract yet)
+Scope: `In Scope Phase 2`  
+Endpoints: `GET /api/v1/admin/settings`, `PATCH /api/v1/admin/settings/{key}`
 
 ---
 
@@ -329,21 +289,21 @@ Deferred components:
 
 | Label | Path | ADMIN | OFFICER | TAXPAYER | Scope |
 |---|---|---|---|---|---|
-| Dashboard | `/dashboard` | Yes | Yes | Yes | In Scope Phase 2 |
-| Parties | `/parties` | Yes | Yes | No | Deferred (list endpoint missing) |
+| Dashboard | `/dashboard` | Yes | Yes | No | In Scope Phase 2 |
+| Parties | `/parties` | Yes | Yes | No | In Scope Phase 2 |
 | Register Party | `/parties/new` | Yes | Yes | No | In Scope Phase 2 |
 | Party Detail | `/parties/{id}` | Yes | Yes | Yes (own only) | In Scope Phase 2 |
-| Filings | `/filings` | Yes | Yes | Yes | In Scope Phase 2 |
-| New Filing | `/filings/new` | Yes | Yes | Yes | In Scope Phase 2 |
+| Filings | `/filings` | Yes | Yes | Yes (own only) | In Scope Phase 2 |
+| New Filing | `/filings/new` | Yes | Yes | Yes (own only) | In Scope Phase 2 |
 | Filing Detail | `/filings/{id}` | Yes | Yes | Yes (own only) | In Scope Phase 2 |
-| Assessments | `/assessments` | Yes | Yes | No | Deferred (list endpoint missing) |
+| Assessments | `/assessments` | Yes | Yes | Yes (own only) | In Scope Phase 2 |
 | Assessment Detail | `/assessments/{id}` | Yes | Yes | Yes (own only) | In Scope Phase 2 |
-| Admin Users | `/admin/users` | Yes | No | No | In Scope Phase 2 (subset) |
-| Admin Settings | `/admin/settings` | Yes | No | No | In Scope Phase 2 (subset) |
+| Admin Users | `/admin/users` | Yes | No | No | In Scope Phase 2 |
+| Admin Settings | `/admin/settings` | Yes | No | No | In Scope Phase 2 |
 
-### 6.2 Breadcrumb Patterns
+### 6.2 Breadcrumb Labels
 
-English primary labels:
+English-first labels:
 - Dashboard
 - Parties / Party
 - Filings / Filing
@@ -355,67 +315,80 @@ English primary labels:
 
 ## 7. User Flows
 
-### 7.1 Officer registers a party
+### 7.1 Officer registers a business party
 
-1. `/login` -> submit credentials (`POST /api/v1/auth/login`)
-2. `/parties/new` -> fill party payload
-3. Submit (`POST /api/v1/parties`) -> redirect `/parties/{id}`
-4. Assign role from detail (`POST /api/v1/parties/{id}/roles`)
+1. Login (`POST /api/v1/auth/login`)
+2. Open `/parties/new`
+3. Submit `POST /api/v1/parties`
+4. Open detail and assign role (`POST /api/v1/parties/{id}/roles`)
 
-### 7.2 Taxpayer submits a VAT filing (Rubrik-first)
+### 7.2 Taxpayer creates and submits VAT filing
 
 1. Open `/filings/new`
-2. Enter party + period
-3. Enter Rubrik A-E and turnover fields
-4. Review computed `momstilsvar`
-5. Save draft (`POST /api/v1/filings`, status starts `DRAFT`)
-6. Submit (`PATCH /api/v1/filings/{id}/submit`)  
-State rule reference: Architect FilingService allows submit only from `DRAFT`.
+2. Enter fixed VAT fields and required period/SE data
+3. Save draft (`POST /api/v1/filings`) -> status `DRAFT`
+4. Submit (`PATCH /api/v1/filings/{id}/submit`) -> status `SUBMITTED`
+5. View receipt data (`kvitteringsnummer`) and deadline/late indicators on detail
 
-### 7.3 Officer creates and progresses assessment
+### 7.3 Officer creates and resolves assessment (SSOT-aligned)
 
 1. Open filing detail (`GET /api/v1/filings/{id}`)
-2. Create assessment (`POST /api/v1/assessments`)
-3. Update assessment status (`PATCH /api/v1/assessments/{id}/status`)
+2. Create assessment (`POST /api/v1/assessments`)  
+Filing side effect: `SUBMITTED -> ACCEPTED` (architect-defined)
+3. Update assessment status (`PATCH /api/v1/assessments/{id}/status`)  
+When status becomes `COMPLETE`, filing status is set by `decision_outcome` (`ACCEPTED` or `REJECTED`)
 
-State rule reference:
-- Allowed assessment transitions: `PENDING -> COMPLETE|APPEALED`, `COMPLETE -> APPEALED`
-- No implicit filing status transition is assumed on assessment create/update.
+### 7.4 Taxpayer appeals completed assessment
 
-### 7.4 Admin monitoring flows
+1. Open assessment detail (`GET /api/v1/assessments/{id}`)
+2. Submit appeal (`POST /api/v1/assessments/{id}/appeal`) before `appeal_deadline`
+3. Resulting state: assessment `COMPLETE -> APPEALED`; filing `ACCEPTED/REJECTED -> UNDER_REVIEW`
 
-1. `/admin/users` -> read session and policy (`GET /api/v1/auth/me`)
-2. `/admin/settings` -> read health (`GET /health`)
-3. Refresh/logout session (`POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`)
+### 7.5 Admin user and setting management
+
+1. Admin opens `/admin/users` and fetches users (`GET /api/v1/admin/users`)
+2. Admin creates user (`POST /api/v1/admin/users`) or updates (`PATCH /api/v1/admin/users/{id}`)
+3. Admin opens `/admin/settings` and fetches settings (`GET /api/v1/admin/settings`)
+4. Admin updates a setting (`PATCH /api/v1/admin/settings/{key}`)
 
 ---
 
 ## 8. Action to API Parity Matrix
 
-| Screen Action | Endpoint | Request Schema | Response Schema | Roles | Scope |
+| Screen Action | Endpoint | Request | Response | Roles | Scope |
 |---|---|---|---|---|---|
-| Login submit | `POST /api/v1/auth/login` | `LoginRequest` | `{"message":"ok"}` + cookies | Public | In Scope Phase 2 |
-| Session refresh | `POST /api/v1/auth/refresh` | none | `{"message":"ok"}` + cookies | Cookie auth | In Scope Phase 2 |
-| Logout | `POST /api/v1/auth/logout` | none | `{"message":"ok"}` | Any authenticated | In Scope Phase 2 |
-| Register party | `POST /api/v1/parties` | `PartyCreate` | `PartyRead` | A,O,T | In Scope Phase 2 |
-| Open party detail | `GET /api/v1/parties/{id}` | none | `PartyRead` | Any (ownership enforced) | In Scope Phase 2 |
-| Assign role | `POST /api/v1/parties/{id}/roles` | `PartyRoleCreate` | `PartyRoleRead` | A,O,T | In Scope Phase 2 |
-| List roles | `GET /api/v1/parties/{id}/roles` | none | `list[PartyRoleRead]` | Any (ownership enforced) | In Scope Phase 2 |
-| List filings by party | `GET /api/v1/parties/{id}/filings` | none | `list[FilingRead]` | Any (ownership enforced) | In Scope Phase 2 |
-| Create filing draft | `POST /api/v1/filings` | `FilingCreate` | `FilingRead` | A,O,T | In Scope Phase 2 |
-| Open filing | `GET /api/v1/filings/{id}` | none | `FilingRead` | Any (ownership enforced) | In Scope Phase 2 |
-| Submit filing | `PATCH /api/v1/filings/{id}/submit` | none | `FilingRead` | A,O,T | In Scope Phase 2 |
+| Login submit | `POST /api/v1/auth/login` | `LoginRequest` | message + cookies | Public | In Scope Phase 2 |
+| Refresh session | `POST /api/v1/auth/refresh` | none | message + cookies | Cookie | In Scope Phase 2 |
+| Logout | `POST /api/v1/auth/logout` | none | message | A,O,T | In Scope Phase 2 |
+| Load dashboard summary | `GET /api/v1/dashboard/summary` | none | summary payload | A,O | In Scope Phase 2 |
+| Load recent parties | `GET /api/v1/parties` | none | `list[PartyRead]` | A,O | In Scope Phase 2 |
+| Load recent filings | `GET /api/v1/filings` | none | `list[FilingRead]` | A,O,T-own | In Scope Phase 2 |
+| Register party | `POST /api/v1/parties` | `PartyCreate` | `PartyRead` | A,O | In Scope Phase 2 |
+| Open party detail | `GET /api/v1/parties/{id}` | none | `PartyRead` | A,O,T-own | In Scope Phase 2 |
+| List party roles | `GET /api/v1/parties/{id}/roles` | none | `list[PartyRoleRead]` | A,O,T-own | In Scope Phase 2 |
+| Assign party role | `POST /api/v1/parties/{id}/roles` | `PartyRoleCreate` | `PartyRoleRead` | A,O | In Scope Phase 2 |
+| List filings | `GET /api/v1/filings` | none | `list[FilingRead]` | A,O,T-own | In Scope Phase 2 |
+| List filings by party | `GET /api/v1/parties/{id}/filings` | none | `list[FilingRead]` | A,O,T-own | In Scope Phase 2 |
+| Create filing draft | `POST /api/v1/filings` | `FilingCreate` | `FilingRead` | A,O,T-own | In Scope Phase 2 |
+| Open filing detail | `GET /api/v1/filings/{id}` | none | `FilingRead` | A,O,T-own | In Scope Phase 2 |
+| Submit filing | `PATCH /api/v1/filings/{id}/submit` | none | `FilingRead` | A,O,T-own | In Scope Phase 2 |
+| Correct filing | `POST /api/v1/filings/{id}/correct` | `FilingCreate` | `FilingRead` | A,O,T-own | In Scope Phase 2 |
+| List assessments | `GET /api/v1/assessments` | none | `list[AssessmentRead]` | A,O,T-own | In Scope Phase 2 |
 | Create assessment | `POST /api/v1/assessments` | `AssessmentCreate` | `AssessmentRead` | A,O | In Scope Phase 2 |
-| Open assessment | `GET /api/v1/assessments/{id}` | none | `AssessmentRead` | Any (ownership enforced) | In Scope Phase 2 |
-| Open assessment by filing | `GET /api/v1/filings/{id}/assessment` | none | `AssessmentRead` | Any (ownership enforced) | In Scope Phase 2 |
+| Open assessment | `GET /api/v1/assessments/{id}` | none | `AssessmentRead` | A,O,T-own | In Scope Phase 2 |
+| Open assessment from filing | `GET /api/v1/filings/{id}/assessment` | none | `AssessmentRead` | A,O,T-own | In Scope Phase 2 |
 | Update assessment status | `PATCH /api/v1/assessments/{id}/status` | `AssessmentStatusUpdate` | `AssessmentRead` | A,O | In Scope Phase 2 |
-| Dashboard health check | `GET /health` | none | `{"status":"ok"}` | Public | In Scope Phase 2 |
+| Appeal assessment | `POST /api/v1/assessments/{id}/appeal` | `AssessmentAppealCreate` | `AssessmentRead` | T-own | In Scope Phase 2 |
+| Load admin users | `GET /api/v1/admin/users` | none | `list[AdminUserRead]` | A | In Scope Phase 2 |
+| Create admin user | `POST /api/v1/admin/users` | admin user create payload | `AdminUserRead` | A | In Scope Phase 2 |
+| Update admin user | `PATCH /api/v1/admin/users/{id}` | admin user patch payload | `AdminUserRead` | A | In Scope Phase 2 |
+| Load admin settings | `GET /api/v1/admin/settings` | none | `list[AdminSettingRead]` | A | In Scope Phase 2 |
+| Update admin setting | `PATCH /api/v1/admin/settings/{key}` | admin setting patch payload | `AdminSettingRead` | A | In Scope Phase 2 |
 
-Deferred actions (not rendered as active controls):
-- Parties list query (missing `GET /api/v1/parties`)
-- Assessments list query (missing `GET /api/v1/assessments`)
-- Admin user CRUD (missing `/admin/users` API contract)
-- Admin writable settings (missing `/admin/settings` API contract)
+Deferred actions:
+- Dedicated receipt retrieval endpoint action (`GET /api/v1/filings/{id}/receipt`) is not in architect contract
+- Dedicated deadline calculator endpoint action (`GET /api/v1/vat-deadlines`) is not in architect contract
+- Manual line-item-first filing editor (non-canonical by decision)
 
 ---
 
@@ -423,47 +396,56 @@ Deferred actions (not rendered as active controls):
 
 | Page Component Field | Display Label | Endpoint/Schema | Architect Field | Scope | Notes |
 |---|---|---|---|---|---|
-| Login.email | Email | `POST /api/v1/auth/login` `LoginRequest` | `email` | In Scope Phase 2 | Direct |
-| Login.password | Password | `POST /api/v1/auth/login` `LoginRequest` | `password` | In Scope Phase 2 | Direct |
-| Session.name | Full Name | `GET /api/v1/auth/me` `UserRead` | `full_name` | In Scope Phase 2 | Direct |
-| Session.role | Role | `GET /api/v1/auth/me` `UserRead` | `role` | In Scope Phase 2 | Direct |
-| Session.active | Active | `GET /api/v1/auth/me` `UserRead` | `is_active` | In Scope Phase 2 | Direct |
-| PartyForm.partyType | Party Type | `POST /api/v1/parties` `PartyCreate` | `partyTypeCode` | In Scope Phase 2 | Backend default `ORGADM1` |
-| PartyForm.identifierType | Identifier Type | `POST /api/v1/parties` | `identifiers[].identifierTypeCL` | In Scope Phase 2 | UI label "CVR/SE Identifier Type" |
-| PartyForm.identifierValue | Identifier Value | `POST /api/v1/parties` | `identifiers[].identifierValue` | In Scope Phase 2 | UI label "CVR/SE Identifier" |
-| PartyForm.businessSize | Business Size | `POST /api/v1/parties` | `classifications[].classificationValue` | In Scope Phase 2 | Type `BUSINESS_SIZE` |
-| PartyForm.state | Party State | `POST /api/v1/parties` | `states[].partyStateCL` | In Scope Phase 2 | `IN_BUSINESS` etc |
-| PartyForm.contactEmail | Contact Email | `POST /api/v1/parties` | `contacts[].contactValue` | In Scope Phase 2 | Direct |
-| PartyForm.legalName | Legal Name | `POST /api/v1/parties` | `names[].name` + `isAlias=false` | In Scope Phase 2 | Direct |
-| RoleForm.roleType | Role Type | `POST /api/v1/parties/{id}/roles` | `party_role_type_code` | In Scope Phase 2 | UI shows mapped label |
-| RoleForm.roleState | Role State | `POST /api/v1/parties/{id}/roles` | `states[].partyRoleStateCL` | In Scope Phase 2 | Direct |
-| RoleForm.primaryIdentifier | Primary Identifier | `POST /api/v1/parties/{id}/roles` | `eligible_identifiers[].party_identifier_id` + `primary` | In Scope Phase 2 | Direct |
-| RoleForm.primaryContact | Primary Contact | `POST /api/v1/parties/{id}/roles` | `eligible_contacts[].party_contact_id` + `primary` | In Scope Phase 2 | Direct |
-| FilingForm.partyId | Party | `POST /api/v1/filings` `FilingCreate` | `party_id` | In Scope Phase 2 | Direct |
-| FilingForm.period | Filing Period | `POST /api/v1/filings` | `filing_period` | In Scope Phase 2 | Direct |
-| FilingForm.type | Filing Type | `POST /api/v1/filings` | `filing_type` | In Scope Phase 2 | Fixed to `VAT` in Phase 2 |
-| FilingForm.rubrikA | Output VAT (Rubrik A) | `POST /api/v1/filings` | `line_items[].amount` | In Scope Phase 2 | Adapter row description `RUBRIK_A` |
-| FilingForm.rubrikB | Input VAT (Rubrik B) | `POST /api/v1/filings` | `line_items[].amount` | In Scope Phase 2 | Adapter row description `RUBRIK_B` |
-| FilingForm.rubrikC | EU Acquisition VAT (Rubrik C) | `POST /api/v1/filings` | `line_items[].amount` | In Scope Phase 2 | Adapter row description `RUBRIK_C` |
-| FilingForm.rubrikD | EU Sales (Rubrik D) | `POST /api/v1/filings` | `line_items[].amount` | In Scope Phase 2 | Adapter row description `RUBRIK_D` |
-| FilingForm.rubrikE | Import VAT (Rubrik E) | `POST /api/v1/filings` | `line_items[].amount` | In Scope Phase 2 | Adapter row description `RUBRIK_E` |
-| FilingForm.taxableTurnover | Taxable Turnover | `POST /api/v1/filings` | `line_items[].amount` | In Scope Phase 2 | Adapter row description `MOMSPLIGTIG` |
-| FilingForm.exemptTurnover | VAT-exempt Turnover | `POST /api/v1/filings` | `line_items[].amount` | In Scope Phase 2 | Adapter row description `MOMSFRI` |
-| FilingForm.exports | Export | `POST /api/v1/filings` | `line_items[].amount` | In Scope Phase 2 | Adapter row description `EKSPORT` |
-| FilingForm.momstilsvar | Net VAT (computed) | `POST /api/v1/filings` | `total_amount` | In Scope Phase 2 | `A + C + E - B` |
-| FilingDetail.statusChip | Filing Status | `GET /api/v1/filings/{id}` | `status` | In Scope Phase 2 | Direct |
-| FilingDetail.submittedAt | Submitted At | `GET /api/v1/filings/{id}` | `submitted_at` | In Scope Phase 2 | Direct |
-| FilingSubmit.action | Submit Filing | `PATCH /api/v1/filings/{id}/submit` | n/a (state mutation) | In Scope Phase 2 | Allowed from `DRAFT` only |
-| AssessmentForm.filingId | Filing | `POST /api/v1/assessments` | `filing_id` | In Scope Phase 2 | Direct |
-| AssessmentForm.date | Assessment Date | `POST /api/v1/assessments` | `assessment_date` | In Scope Phase 2 | String per architect |
-| AssessmentForm.taxDue | Tax Due | `POST /api/v1/assessments` | `tax_due` | In Scope Phase 2 | Direct |
-| AssessmentForm.penalties | Penalties | `POST /api/v1/assessments` | `penalties` | In Scope Phase 2 | Direct |
-| AssessmentForm.notes | Reasoning/Notes | `POST /api/v1/assessments` | `notes` | In Scope Phase 2 | Direct |
-| AssessmentStatus.action | Update Status | `PATCH /api/v1/assessments/{id}/status` | `status` | In Scope Phase 2 | Constrained transitions |
-| AdminUsers.health | Health | `GET /health` | `status` | In Scope Phase 2 | Endpoint-backed |
-| AdminUsers.currentUser | Current Admin | `GET /api/v1/auth/me` | `id`,`email`,`role`,`is_active` | In Scope Phase 2 | Endpoint-backed |
-| AdminUsers.manageUser | User CRUD | n/a | n/a | Deferred | No architect endpoint |
-| AdminSettings.save | Save Settings | n/a | n/a | Deferred | No architect endpoint |
+| Login.email | Email | `POST /api/v1/auth/login` | `email` | In Scope Phase 2 | direct |
+| Login.password | Password | `POST /api/v1/auth/login` | `password` | In Scope Phase 2 | direct |
+| Dashboard.summaryKey | Metric Label | `GET /api/v1/dashboard/summary` | response key | In Scope Phase 2 | server-driven key/value |
+| Dashboard.summaryValue | Metric Value | `GET /api/v1/dashboard/summary` | response value | In Scope Phase 2 | server-driven key/value |
+| PartyForm.partyType | Party Type | `POST /api/v1/parties` | `partyTypeCode` | In Scope Phase 2 | direct |
+| PartyForm.identifierType | Identifier Type | `POST /api/v1/parties` | `identifiers[].identifierTypeCL` | In Scope Phase 2 | CVR/SE label in UI |
+| PartyForm.identifierValue | Identifier Value | `POST /api/v1/parties` | `identifiers[].identifierValue` | In Scope Phase 2 | direct |
+| PartyForm.state | Party State | `POST /api/v1/parties` | `states[].partyStateCL` | In Scope Phase 2 | direct |
+| RoleForm.roleType | Role Type | `POST /api/v1/parties/{id}/roles` | `party_role_type_code` | In Scope Phase 2 | direct |
+| FilingForm.partyId | Party | `POST /api/v1/filings` | `party_id` | In Scope Phase 2 | direct |
+| FilingForm.seNummer | SE Number | `POST /api/v1/filings` | `se_nummer` | In Scope Phase 2 | fixed-length 8 |
+| FilingForm.periodType | Period Type | `POST /api/v1/filings` | `afregningsperiode_type` | In Scope Phase 2 | MONTHLY/QUARTERLY/SEMI_ANNUAL |
+| FilingForm.period | Filing Period | `POST /api/v1/filings` | `filing_period` | In Scope Phase 2 | format by type |
+| FilingForm.angivelseType | Return Type | `POST /api/v1/filings` | `angivelse_type` | In Scope Phase 2 | fixed `MOMS` |
+| FilingForm.rubrikA | Output VAT | `POST /api/v1/filings` | `rubrik_a` | In Scope Phase 2 | canonical |
+| FilingForm.rubrikB | Input VAT | `POST /api/v1/filings` | `rubrik_b` | In Scope Phase 2 | canonical |
+| FilingForm.rubrikC | EU Purchase VAT | `POST /api/v1/filings` | `rubrik_c` | In Scope Phase 2 | canonical |
+| FilingForm.rubrikD | EU Sales Value | `POST /api/v1/filings` | `rubrik_d` | In Scope Phase 2 | canonical |
+| FilingForm.rubrikE | Import VAT | `POST /api/v1/filings` | `rubrik_e` | In Scope Phase 2 | canonical |
+| FilingForm.taxableTurnover | Taxable Turnover | `POST /api/v1/filings` | `momspligtig_omsaetning` | In Scope Phase 2 | canonical |
+| FilingForm.exemptTurnover | VAT-exempt Turnover | `POST /api/v1/filings` | `momsfri_omsaetning` | In Scope Phase 2 | canonical |
+| FilingForm.export | Export | `POST /api/v1/filings` | `eksport` | In Scope Phase 2 | canonical |
+| FilingForm.supplemental | Optional Detail | `POST /api/v1/filings` | `supplemental_line_items` | In Scope Phase 2 | non-canonical |
+| FilingDetail.status | Filing Status | `GET /api/v1/filings/{id}` | `status` | In Scope Phase 2 | direct |
+| FilingDetail.version | Version | `GET /api/v1/filings/{id}` | `version` | In Scope Phase 2 | correction chain |
+| FilingDetail.momstilsvar | Net VAT | `GET /api/v1/filings/{id}` | `momstilsvar` | In Scope Phase 2 | server computed |
+| FilingDetail.deadline | Filing Deadline | `GET /api/v1/filings/{id}` | `frist` | In Scope Phase 2 | deterministic service rule |
+| FilingDetail.lateDays | Late Days | `GET /api/v1/filings/{id}` | `late_filing_days` | In Scope Phase 2 | direct |
+| FilingDetail.latePenalty | Late Penalty | `GET /api/v1/filings/{id}` | `late_filing_penalty` | In Scope Phase 2 | direct |
+| FilingDetail.receiptNo | Receipt Number | `GET /api/v1/filings/{id}` | `kvitteringsnummer` | In Scope Phase 2 | no separate receipt endpoint |
+| FilingDetail.correctedFlag | Correction Flag | `GET /api/v1/filings/{id}` | `korrektionsangivelse` | In Scope Phase 2 | direct |
+| FilingCorrection.originalId | Original Filing | `GET /api/v1/filings/{id}` | `original_filing_id` | In Scope Phase 2 | direct |
+| AssessmentForm.filingId | Filing | `POST /api/v1/assessments` | `filing_id` | In Scope Phase 2 | direct |
+| AssessmentForm.assessmentDate | Assessment Date | `POST /api/v1/assessments` | `assessment_date` | In Scope Phase 2 | typed date |
+| AssessmentForm.outcome | Decision Outcome | `POST /api/v1/assessments` | `decision_outcome` | In Scope Phase 2 | ACCEPTED/ADJUSTED/REJECTED |
+| AssessmentForm.taxDue | Tax Due | `POST /api/v1/assessments` | `tax_due` | In Scope Phase 2 | direct |
+| AssessmentForm.surcharge | Surcharge | `POST /api/v1/assessments` | `surcharge_amount` | In Scope Phase 2 | separate from interest |
+| AssessmentForm.interest | Interest | `POST /api/v1/assessments` | `interest_amount` | In Scope Phase 2 | separate from surcharge |
+| AssessmentForm.paymentDeadline | Payment Deadline | `POST /api/v1/assessments` | `payment_deadline` | In Scope Phase 2 | must be >= assessment_date |
+| AssessmentForm.appealDeadline | Appeal Deadline | `POST /api/v1/assessments` | `appeal_deadline` | In Scope Phase 2 | must be >= assessment_date |
+| AssessmentForm.notes | Notes | `POST /api/v1/assessments` | `notes` | In Scope Phase 2 | direct |
+| AssessmentStatus.newStatus | Status | `PATCH /api/v1/assessments/{id}/status` | `status` | In Scope Phase 2 | SSOT transition-constrained |
+| AssessmentAppeal.reason | Appeal Reason | `POST /api/v1/assessments/{id}/appeal` | `reason` | In Scope Phase 2 | taxpayer-owned only |
+| AdminUsers.row.email | Email | `GET /api/v1/admin/users` | `email` | In Scope Phase 2 | from `AdminUserRead` |
+| AdminUsers.row.name | Full Name | `GET /api/v1/admin/users` | `full_name` | In Scope Phase 2 | from `AdminUserRead` |
+| AdminUsers.row.role | Role | `GET /api/v1/admin/users` | `role` | In Scope Phase 2 | from `AdminUserRead` |
+| AdminUsers.row.active | Active | `GET /api/v1/admin/users` | `is_active` | In Scope Phase 2 | from `AdminUserRead` |
+| AdminSettings.row.key | Setting Key | `GET /api/v1/admin/settings` | `key` | In Scope Phase 2 | from `AdminSettingRead` |
+| AdminSettings.row.value | Setting Value | `GET /api/v1/admin/settings` | `value` | In Scope Phase 2 | from `AdminSettingRead` |
+| AdminSettings.row.updatedAt | Updated At | `GET /api/v1/admin/settings` | `updated_at` | In Scope Phase 2 | from `AdminSettingRead` |
 
 ---
 
@@ -471,25 +453,22 @@ Deferred actions (not rendered as active controls):
 
 | Screen/Action | Scope | Rationale |
 |---|---|---|
-| Login | In Scope Phase 2 | Full API contract exists |
-| Dashboard (session + health) | In Scope Phase 2 | Endpoint-backed via `/auth/me` and `/health` |
-| Dashboard aggregate stats | Deferred | No list endpoints for global counts |
-| Parties list page | Deferred | No `GET /api/v1/parties` endpoint |
+| Login | In Scope Phase 2 | full auth contract exists |
+| Dashboard | In Scope Phase 2 | summary + recent activity endpoints exist |
+| Parties list | In Scope Phase 2 | `GET /api/v1/parties` exists |
 | Register party | In Scope Phase 2 | `POST /api/v1/parties` exists |
 | Party detail | In Scope Phase 2 | `GET /api/v1/parties/{id}` exists |
-| Assign role modal | In Scope Phase 2 | `POST /api/v1/parties/{id}/roles` exists |
-| Filings list (party-scoped) | In Scope Phase 2 | `GET /api/v1/parties/{id}/filings` exists |
-| Filing detail | In Scope Phase 2 | `GET /api/v1/filings/{id}` exists |
-| Create filing (Rubrik-first) | In Scope Phase 2 | `POST /api/v1/filings` exists, adapter used |
-| Filing submit | In Scope Phase 2 | `PATCH /api/v1/filings/{id}/submit` exists |
-| Assessments list page | Deferred | No `GET /api/v1/assessments` endpoint |
-| Assessment detail | In Scope Phase 2 | `GET /api/v1/assessments/{id}` exists |
-| Create assessment | In Scope Phase 2 | `POST /api/v1/assessments` exists |
-| Assessment status updates | In Scope Phase 2 | `PATCH /api/v1/assessments/{id}/status` exists |
-| Admin users (session/policy only) | In Scope Phase 2 | Endpoint-backed subset only |
-| Admin settings (health/session only) | In Scope Phase 2 | Endpoint-backed subset only |
-| Admin user management | Deferred | Missing API contract |
-| Admin writable settings | Deferred | Missing API contract |
+| Party role assignment | In Scope Phase 2 | `POST /api/v1/parties/{id}/roles` exists |
+| Filings list | In Scope Phase 2 | `GET /api/v1/filings` exists |
+| Filing create/submit | In Scope Phase 2 | `POST /filings` and `PATCH /filings/{id}/submit` exist |
+| Filing correction | In Scope Phase 2 | `POST /filings/{id}/correct` exists |
+| Assessments list | In Scope Phase 2 | `GET /api/v1/assessments` exists |
+| Assessment create/status | In Scope Phase 2 | `POST` and `PATCH` endpoints exist |
+| Assessment appeal | In Scope Phase 2 | `POST /assessments/{id}/appeal` exists |
+| Admin users | In Scope Phase 2 | `GET/POST/PATCH /api/v1/admin/users...` exists |
+| Admin settings | In Scope Phase 2 | `GET/PATCH /api/v1/admin/settings...` exists |
+| Dedicated receipt retrieval view | Deferred | no receipt endpoint in architect contract |
+| Manual line-item editor | Deferred | non-canonical by 4C decision |
 
 ---
 
@@ -497,94 +476,98 @@ Deferred actions (not rendered as active controls):
 
 ### 11.1 Strict Access Control
 
-Frontend enforces role-based navigation plus ownership gating:
-- TAXPAYER can only access own party/filing/assessment links.
-- OFFICER and ADMIN can access officer flows.
-- ADMIN-only routes are `/admin/users` and `/admin/settings`.
+Applied as UI guardrails with backend as source of truth:
+- `ADMIN`: full app access
+- `OFFICER`: parties, filings, assessments, dashboard
+- `TAXPAYER`: own party/filings/assessments only
 
-Backend remains the source of truth. On unauthorized access:
-- `403` -> permission denied screen
-- `404` -> resource hidden/not found
+Failure handling:
+- `401` unauthenticated -> login redirect
+- `403` forbidden -> permission screen
+- `404` ownership-protected missing resource -> not found screen
 
-### 11.2 Filing State Rules (Architect Section 3.5)
+### 11.2 Filing and Assessment SSOT (Architect 3.1.1)
 
-- Filing created as `DRAFT`
-- Submit allowed only when current status is `DRAFT`
-- No UI assumption of post-assessment filing status mutation
+- `POST /filings`: `NONE -> DRAFT`
+- `PATCH /filings/{id}/submit`: `DRAFT -> SUBMITTED`
+- `POST /assessments`: filing `SUBMITTED -> ACCEPTED`, assessment `NONE -> PENDING`
+- `PATCH /assessments/{id}/status` to `COMPLETE`: filing becomes `ACCEPTED` or `REJECTED` from `decision_outcome`
+- `POST /assessments/{id}/appeal`: assessment `COMPLETE -> APPEALED`, filing `ACCEPTED/REJECTED -> UNDER_REVIEW`
+- `POST /filings/{id}/correct`: previous filing `-> CORRECTED`, new version starts `DRAFT`
 
-### 11.3 Assessment State Rules (Architect Section 4.5)
+No extra side effects are described in UI unless listed in SSOT above.
 
-- Allowed transitions:
-  - `PENDING -> COMPLETE`
-  - `PENDING -> APPEALED`
-  - `COMPLETE -> APPEALED`
-- Duplicate assessment for same filing returns `409`
+### 11.3 Deadline and Penalty Handling
 
-### 11.4 Deadlines and Penalties
-
-- Penalties are in-scope and rendered from `Assessment.penalties`.
-- Deadline enforcement is required by product direction; UI handles deadline/late-file errors returned from filing endpoints as authoritative backend outcomes.
-- No client-side legal deadline calculation is used as source of truth.
+- Filing deadline and late penalty are displayed from `frist`, `late_filing_days`, `late_filing_penalty`
+- Assessment deadlines are displayed from `payment_deadline` and `appeal_deadline`
+- Surcharge and interest are separate and shown as separate amounts
 
 ---
 
 ## 12. Terminology Map (Domain Value -> Display Label)
 
-### 12.1 Status and Workflow Terms
+### 12.1 Filing Domain
 
 | Domain Value | Display Label (English first) |
+|---|---|
+| `angivelse_type = MOMS` | VAT Return (`Momsangivelse`) |
+| `rubrik_a` | Output VAT |
+| `rubrik_b` | Input VAT |
+| `rubrik_c` | EU Purchase VAT |
+| `rubrik_d` | EU Sales Value |
+| `rubrik_e` | Import VAT |
+| `momstilsvar` | Net VAT Amount |
+| `kvitteringsnummer` | Receipt Number (`Kvitteringsnummer`) |
+| `supplemental_line_items` | Optional Detail Lines (non-canonical) |
+
+### 12.2 Status Domain
+
+| Domain Value | Display Label |
 |---|---|
 | `DRAFT` | Draft (`Kladde`) |
 | `SUBMITTED` | Submitted (`Indberettet`) |
 | `UNDER_REVIEW` | Under Review (`Under behandling`) |
 | `ACCEPTED` | Accepted (`Godkendt`) |
 | `REJECTED` | Rejected (`Afvist`) |
+| `CORRECTED` | Corrected (`Korrigeret`) |
 | `PENDING` | Pending (`Afventende`) |
 | `COMPLETE` | Complete (`Afsluttet`) |
 | `APPEALED` | Appealed (`Anket`) |
 
-### 12.2 Filing Terms
+### 12.3 Assessment Domain
 
 | Domain Value | Display Label |
 |---|---|
-| `filing_type = VAT` | VAT Return (`Momsangivelse`) |
-| `line_items` (transport) | Fixed VAT Fields (Rubrik A-E and summaries) |
-| `total_amount` | Net VAT (`Momstilsvar`) |
-
-### 12.3 Party and Role Terms
-
-| Domain Value | Display Label |
-|---|---|
-| `identifierTypeCL = TIN` | CVR/SE Identifier (backend code `TIN`) |
-| `partyStateCL = IN_BUSINESS` | Active (`Aktiv`) |
-| `party_role_type_code = BUSINSSDM1` | VAT Registered Business Role |
-| `partyTypeCode = ORGADM1` | Business Organization |
+| `decision_outcome = ACCEPTED` | Outcome: Accepted |
+| `decision_outcome = ADJUSTED` | Outcome: Adjusted |
+| `decision_outcome = REJECTED` | Outcome: Rejected |
+| `surcharge_amount` | Surcharge |
+| `interest_amount` | Interest |
 
 ---
 
-## 13. SKAT VAT UX Benchmark Alignment and Deviations
+## 13. SKAT Benchmark Alignment and Explicit Deviations
 
-### 13.1 Alignment to SKAT Workflow
+### 13.1 Alignment
 
-The filing UX mirrors the benchmark sequence:
-1. Open new VAT filing
-2. Select party/period
-3. Enter Rubrik A-E
-4. Review computed `momstilsvar`
-5. Submit and show receipt state
+Filing UX mirrors the benchmark behavior from researcher Section 2:
+1. Fixed VAT fields, not free-form canonical entry
+2. Required markers and inline helper cues
+3. Draft first, submit second
+4. Confirmation/receipt state after submission
+5. Correction path supported
+6. Payment/refund implications exposed from submission outcome fields
 
-Required-field markers, grouped field cards, and confirmation review follow the same workflow shape.
-
-### 13.2 Explicit Deviations From SKAT Workflow
+### 13.2 Explicit Deviations
 
 | Deviation | Why | Scope |
 |---|---|---|
-| English-first labels with Danish aliases | Product policy is mostly English UI while preserving legal terminology traceability | In Scope Phase 2 |
-| Internal auth flow (email/password) instead of MitID Erhverv | Current architect contract defines internal auth only | In Scope Phase 2 |
-| No PDF receipt download action | No receipt/PDF endpoint in architect contract | Deferred |
-| No dedicated correction filing action | `POST /filings/{id}/correct` not in architect contract | Deferred |
-| No Listesystem integration action when Rubrik D > 0 | Endpoint/event not in architect contract | Deferred |
-| Admin pages limited to endpoint-backed subset | Admin CRUD/settings APIs are missing | In Scope Phase 2 subset + deferred full feature set |
+| English-first UI with Danish legal aliases | fixed product decision | In Scope Phase 2 |
+| Internal email/password auth, not MitID Erhverv | current architect contract | In Scope Phase 2 |
+| Stable English enum persistence | architect contract stability | In Scope Phase 2 |
+| Optional supplemental detail lines | bookkeeping convenience, non-canonical | In Scope Phase 2 |
+| Admin pages included | fixed product decision | In Scope Phase 2 |
 
 ---
 
@@ -605,11 +588,13 @@ frontend/
   app/
     (auth)/login/page.tsx
     (app)/dashboard/page.tsx
+    (app)/parties/page.tsx
     (app)/parties/new/page.tsx
     (app)/parties/[id]/page.tsx
     (app)/filings/page.tsx
     (app)/filings/new/page.tsx
     (app)/filings/[id]/page.tsx
+    (app)/assessments/page.tsx
     (app)/assessments/[id]/page.tsx
     (app)/admin/users/page.tsx
     (app)/admin/settings/page.tsx
@@ -618,24 +603,32 @@ frontend/
       CreateFilingRubrikForm.tsx
       FilingRubrikSummaryCard.tsx
       FilingStatusTimeline.tsx
+      FilingCorrectionPanel.tsx
     assessments/
       CreateAssessmentForm.tsx
       AssessmentStatusTimeline.tsx
-    parties/
-      RegisterPartyForm.tsx
-      AssignRoleModal.tsx
+      AssessmentAppealPanel.tsx
     admin/
-      AdminSessionCard.tsx
-      AdminHealthCard.tsx
-  lib/api/
-    auth.ts
-    parties.ts
-    filings.ts
-    assessments.ts
-  lib/mappers/
-    filingRubrikAdapter.ts
+      AdminUsersTable.tsx
+      AdminSettingsTable.tsx
 ```
 
 Notes:
-- `filingRubrikAdapter.ts` is mandatory to keep fixed-field UX while current architect payload uses `line_items`.
-- Deferred features remain physically separated behind feature flags until endpoints are added.
+- `supplemental_line_items` support is import-style and non-canonical.
+- No manual line-item-first filing editor is included in Phase 2.
+
+---
+
+## 16. Pass-2 Delta + Unresolved Blockers
+
+Pass-2 delta:
+- Removed pass-1 adapter assumptions; filing mapping now uses architect canonical fields directly.
+- Reclassified parties list, assessments list, and full admin users/settings as In Scope based on new endpoints.
+- Updated state behavior to architect SSOT, including explicit filing side effects on assessment create/status/appeal.
+- Added correction flow and appeal flow as first-class UI actions with endpoint mapping.
+- Updated data alignment for new fields: `se_nummer`, `afregningsperiode_type`, `version`, `frist`, `late_filing_penalty`, `decision_outcome`, `surcharge_amount`, `interest_amount`.
+
+Unresolved blockers:
+- Dashboard summary response schema is not explicitly typed in architect spec; UI must treat summary payload as server-driven key/value until schema is published.
+- Researcher recommends dedicated receipt and deadline endpoints; architect contract currently exposes receipt/deadline only through filing and assessment resources.
+- Researcher policy calls for configurable sanction/rate policy store; architect filing service currently specifies a deterministic hardcoded late penalty formula (`DKK 65/day`, cap `DKK 1,000`).
