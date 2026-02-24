@@ -715,7 +715,7 @@ The following table is the only valid state machine for Filing + Assessment side
 | `POST /api/v1/assessments/{id}/appeal` | Assessment is `COMPLETE`, caller owns filing | `NO_CHANGE` | `COMPLETE -> APPEALED` | Set `appealed_at`; enforce 3-month appeal deadline |
 | `POST /api/v1/filings/{id}/correct` | Filing status in `{SUBMITTED_WITH_RECEIPT, ACCEPTED, REJECTED}` | previous version -> `CORRECTED`; new version `DRAFT` | `NONE` | Increment filing `version`, link `original_filing_id` |
 
-State policy note: Filing and Assessment are decoupled state machines. Assessment endpoints (`/api/v1/assessments*`) MUST keep filing transition as `NO_CHANGE`; filing status transitions are allowed only through explicit filing endpoints.
+State policy note: Filing and Assessment are decoupled state machines. Assessment endpoints (`/api/v1/assessments*`) MUST keep filing transition as `NO_CHANGE`; filing status transitions are allowed only through explicit filing endpoints. `UNDER_REVIEW` is reserved/deferred in Phase 2 for forward compatibility and is excluded from active Phase 2 transition paths.
 
 ### 3.1.2 Researcher/Designer Alignment Notes (Pass 2)
 
@@ -805,7 +805,7 @@ class Filing(Base, TimestampMixin):
 | `filing_period` | `YYYY-MM` (monthly), `YYYY-QN` (quarterly), `YYYY-HN` (semi-annual) |
 | `submission_outcome` | `PAYABLE`, `REFUNDABLE`, `NIL` (computed at submission) |
 
-`UNDER_REVIEW`, `ACCEPTED`, and `REJECTED` are filing-domain statuses and are never set by assessment endpoints.
+`UNDER_REVIEW` is reserved/deferred in Phase 2 (forward compatibility only) and is not part of active Phase 2 transition paths. `ACCEPTED` and `REJECTED` are filing-domain statuses and are never set by assessment endpoints.
 
 ### 3.3 Pydantic Schemas
 
@@ -2581,14 +2581,19 @@ export interface ValidationError {
 ### Unresolved Blockers
 
 - None blocking for Architect scope.
-- Cross-agent follow-up: Designer `Data Contract Alignment Table` still references legacy `filing_type/line_items/penalties` transport fields and should be updated to canonical fields + transitional adapter note.
 
 ## Pass-3 delta (state-policy alignment)
 
 - Normalized correction precondition wording to canonical status-set notation and removed slash-alias style.
 - Added explicit state-policy note that assessment endpoints must keep filing transition as `NO_CHANGE`.
-- Clarified filing-status ownership: `UNDER_REVIEW`, `ACCEPTED`, and `REJECTED` are filing-domain statuses only.
+- Clarified `UNDER_REVIEW` policy as reserved/deferred in Phase 2 and excluded from active transition paths.
 - Added explicit API parity row confirming assessment appeal also has no implicit filing mutation.
+
+## Micro-fix delta
+
+- Removed stale cross-agent unresolved-blocker note that no longer applies.
+- Reconfirmed decoupled state policy: assessment endpoints remain `NO_CHANGE` for filing transitions.
+- Standardized `UNDER_REVIEW` treatment as reserved/deferred (forward compatibility only), not an active Phase 2 transition path.
 
 
 
