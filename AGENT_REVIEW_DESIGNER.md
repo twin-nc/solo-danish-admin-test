@@ -69,6 +69,7 @@ This document isolates Designer-owned corrections to ensure the UI/UX spec stays
 3. Mark all screens/actions as `In Scope Phase 2` or `Deferred` based on resolved Architect contract.
 4. Replace implied backend behavior statements with references to Architect-defined state rules.
    - Explicitly enforce no implicit filing mutation from assessment endpoints.
+   - Treat `UNDER_REVIEW` as reserved/deferred in Phase 2 (label may exist, but no active transition usage).
 5. Add a terminology map section (`domain value` -> `display label`) agreed with Architect/Researcher.
 6. Consume the Researcher "SKAT VAT Filing UX Benchmark" and align filing UX patterns:
    - Step order

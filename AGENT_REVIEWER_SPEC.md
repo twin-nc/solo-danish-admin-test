@@ -21,6 +21,9 @@ The following product decisions are now fixed unless explicitly changed by the p
 8. Assessment actions must **not** implicitly mutate filing status.
    - Filing and assessment state machines are decoupled by policy.
    - Any filing status change must occur through explicit filing endpoints only.
+9. Filing status `UNDER_REVIEW` is **reserved/deferred** in Phase 2.
+   - Keep it as a forward-compatible status label/type only.
+   - Do not include it in active Phase 2 transition paths.
 
 New mandatory direction:
 - Researcher must benchmark the **current SKAT VAT filing style in TastSelv Erhverv** and provide a replication brief (flow, field structure, controls, states, and terminology), based on official sources.
@@ -51,6 +54,7 @@ The three Phase 1 specs are substantial and useful, but they are not yet decisio
 | Status terminology policy (Danish vs English vs dual mapping) | Architect + Designer + Researcher | Persistence-language decision, UI display policy, and migration impact. |
 | Admin page scope (`/admin/users`, `/admin/settings`) | Architect + Designer | In-scope or deferred, with API readiness and dependency analysis. |
 | Filing status transitions on assessment events | Architect + Designer | Single canonical state machine and side-effect ownership. |
+| Filing status set scope (`UNDER_REVIEW`) | Architect + Designer | Keep status declared but reserved/deferred in Phase 2 unless explicit transition contract is added. |
 | Authorization and ownership rules | Architect | Row-level access policy by role and threat/risk rationale. |
 
 ## Cross-Spec Coherence Findings

@@ -71,6 +71,7 @@ This document isolates Architect-owned issues from Reviewer findings so updates 
 5. Resolve assessment date typing and state-transition rules, enforcing:
    - no implicit filing mutation from assessment endpoints.
    - filing transitions only via filing endpoints.
+   - `UNDER_REVIEW` kept as reserved/deferred in Phase 2 (declared but not active in transitions).
 6. Update event payload definitions if Filing schema changes.
 7. Consume the Researcher "SKAT VAT Filing UX Benchmark" and reflect it in:
    - Filing endpoint flow
