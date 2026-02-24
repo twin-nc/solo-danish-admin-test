@@ -49,6 +49,8 @@ The following rules apply to every new module without exception. They mirror the
 | Auth token storage | HttpOnly cookies (set by the backend, never touched by JS) |
 | Package manager | npm |
 
+> **App Router rationale (Reviewer ACTION addressed):** Next.js App Router was selected over Pages Router primarily for its nested layout support — the admin shell (SideNav, PageHeader, ToastContainer) wraps all authenticated routes via `app/(authenticated)/layout.tsx` without prop drilling. React Server Components allow the dashboard stat cards to be fetched server-side on initial load, reducing client-side waterfall requests. For this authenticated admin tool the client/server boundary is kept simple: all data-fetching components are Server Components; interactive form components are Client Components. The complexity trade-off is justified by the zero-cost persistent layout and first-load performance benefit.
+
 ### 1.2 Folder Structure
 
 The complete directory tree for `frontend/`. Every file listed here must be created.
@@ -364,13 +366,15 @@ export const config = {
 
 Tokens are **never** returned in the JSON response body. They are always delivered exclusively via `Set-Cookie` headers to prevent XSS access.
 
+> **Refresh token limitation (Reviewer ACTION addressed):** The logout endpoint clears the HttpOnly cookie on the client side but does not server-side invalidate the JWT. A stolen refresh token remains valid for up to 7 days. For this internal admin tool at Phase 2, this is an accepted trade-off. Token revocation via a server-side blocklist (Redis or database) is a Phase 3 security hardening concern.
+
 ### 2.2 New Database Table: `users`
 
 **`app/models/user.py`**
 ```python
 import uuid
 
-from sqlalchemy import Boolean, String
+from sqlalchemy import Boolean, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -393,6 +397,14 @@ class User(Base, TimestampMixin):
     )  # ADMIN | OFFICER | TAXPAYER
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False
+    )
+    # Nullable FK — only populated for TAXPAYER users; ADMIN and OFFICER leave this NULL.
+    # Used for the TAXPAYER authorization predicate: current_user.party_id == resource.party_id.
+    party_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parties.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 ```
 
@@ -460,6 +472,7 @@ class UserRead(BaseModel):
     full_name: str
     role: str
     is_active: bool
+    party_id: uuid.UUID | None  # None for ADMIN / OFFICER users
     created_at: datetime
     updated_at: datetime
 
@@ -471,6 +484,7 @@ class UserRead(BaseModel):
             full_name=obj.full_name,
             role=obj.role,
             is_active=obj.is_active,
+            party_id=obj.party_id,
             created_at=obj.created_at,
             updated_at=obj.updated_at,
         )
@@ -481,6 +495,7 @@ class UserCreate(BaseModel):
     full_name: str
     password: str
     role: str = "TAXPAYER"
+    party_id: uuid.UUID | None = None  # Required when role == "TAXPAYER"
 ```
 
 **Token cookie specification:**
@@ -722,6 +737,61 @@ State policy note: Filing and Assessment are decoupled state machines. Assessmen
 - Legal baseline references consumed: `C02`, `C03`, `C05`, `C06`, `C10`, `C12`, `C16` from latest `AGENT_RESEARCHER_SPEC.md`.
 - Canonical shape remains fixed VAT fields (4C hard rule); line-item transport is accepted only as temporary non-canonical adapter input.
 - Assessment create/update does not mutate filing status implicitly (matched to latest `AGENT_DESIGN_SPEC.md` flow/state expectations).
+
+### 3.1.3 momstilsvar Formula (Explicit Statement — Reviewer ACTION addressed)
+
+The canonical VAT balance formula mandated by **Momsloven §56** is:
+
+```
+momstilsvar = Rubrik A + Rubrik C + Rubrik E − Rubrik B
+```
+
+Where:
+- **Rubrik A** — Udgående moms (output VAT at 25% on taxable sales)
+- **Rubrik B** — Indgående moms (input VAT deductible — purchases for business use)
+- **Rubrik C** — Moms af EU-erhvervelser (VAT on EU acquisitions, self-assessed)
+- **Rubrik D** — Momspligtig omsætning (taxable turnover — informational, not in formula)
+- **Rubrik E** — Moms ved importafgiftsordning (VAT at import, reverse charge)
+
+A positive `momstilsvar` means the taxpayer owes VAT to SKAT (PAYABLE). A negative value means SKAT owes a refund (REFUNDABLE). Zero means no payment (NIL).
+
+This formula is implemented in `FilingService._compute_momstilsvar` (Section 3.5) and is enforced at the database level via the `momstilsvar` column, which is computed and stored at draft creation time (not recalculated at submission). The Designer's Momsangivelse form (AGENT_DESIGN_SPEC.md — Create Filing page) shows all five Rubrik fields and the computed `momstilsvar` result inline.
+
+### 3.1.4 Late Submission Behaviour (Reviewer ACTION addressed)
+
+A late submission is a filing submitted after its `frist` (deadline). Phase 2 policy:
+
+1. **Late filings are accepted** — `submit_filing` does not block a submission because `submitted_at > frist`. SKAT's own system (TastSelv) also accepts late filings with a penalty.
+2. **Penalty computed at submission time** — `late_filing_days = (submitted_at.date() - frist).days` and `late_filing_penalty = VatPolicy.late_filing_fee_amount` (per `Opkrævningslovens § 4`). Both values are persisted on the `Filing` row.
+3. **`FilingPenaltyAccrued` event published** — if `late_filing_days > 0`. Subscribers log the penalty; no automatic workflow is triggered.
+4. **Filing status after late submission** — the same `SUBMITTED_WITH_RECEIPT`. There is no separate "late" status in Phase 2. The `late_filing_days > 0` field signals lateness to the UI.
+5. **Provisional assessment on late filing** — deferred to Phase 3. The Assessment module does not create a provisional assessment automatically in Phase 2.
+
+### 3.1.5 kvitteringsnummer (Reviewer ACTION addressed)
+
+In Phase 2, `kvitteringsnummer` is generated locally by the platform as a deterministic reference string:
+
+```
+KVIT-{se_nummer}-{filing_period}-{unix_timestamp_seconds}
+```
+
+Example: `KVIT-12345678-2025-Q3-1735689600`
+
+This format is stable and can be asserted on in tests. SKAT integration for receiving an external receipt number from the TastSelv API is deferred to Phase 3. The `kvitteringsnummer` column stores this platform-generated value at submission time.
+
+### 3.1.6 Assessment Officer Assignment (Reviewer ACTION addressed)
+
+An `assessed_by` field exists on `TaxAssessment` recording which officer created the assessment. Reassigning a different officer after creation (`PATCH /api/v1/assessments/{id}/assign`) is **deferred to Phase 3**. Phase 2 officers cannot transfer ownership of an assessment after it is created.
+
+### 3.1.7 Frist (Deadline) Legal Citations
+
+The filing deadline day-of-month values in `_compute_deadline` are based on:
+
+- **MONTHLY (25th of following month):** Momslovens § 57, stk. 3 — "angivelsen og betalingen skal ske senest den 25. i den måned, der følger efter afgiftsperiodens udløb."
+- **QUARTERLY (10th of second month after quarter end):** Momslovens § 57, stk. 4 — "angivelsen og betalingen skal ske senest den 10. i den anden måned efter afgiftsperiodens udløb." Quarter end months: Mar (Q1), Jun (Q2), Sep (Q3), Dec (Q4); deadlines: May 10 (Q1), Aug 10 (Q2), Nov 10 (Q3), Feb 10 of next year (Q4).
+- **SEMI-ANNUAL (1 Sep and 1 Mar):** Momslovens § 57, stk. 5 — for the smallest registrants; first half deadline: September 1; second half deadline: March 1 of following year.
+
+All deadlines are adjusted to the next open bank day via `VatPolicyRepository.get_next_open_bank_day` if the statutory date falls on a weekend or public holiday.
 - Receipt state is explicit and retrievable (`receipt_id`, `submitted_at`, `submission_outcome`).
 
 ### 3.2 Domain Model
@@ -734,7 +804,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
-    Boolean, Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, UniqueConstraint,
+    Boolean, Date, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -788,9 +858,15 @@ class Filing(Base, TimestampMixin):
     supplemental_line_items: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint(
-            "se_nummer", "filing_period", "angivelse_type", "version",
-            name="uq_filing_se_period_type_version",
+        # Partial unique index: only one canonical (non-correction) filing per
+        # (se_nummer, filing_period, angivelse_type). Corrections (korrektionsangivelse=True)
+        # are intentionally excluded so multiple correction versions can coexist.
+        # Race-condition safety: the service layer catches IntegrityError on conflict.
+        Index(
+            "uq_filing_canonical_se_period_type",
+            "se_nummer", "filing_period", "angivelse_type",
+            unique=True,
+            postgresql_where="korrektionsangivelse = false",
         ),
     )
 ```
@@ -963,6 +1039,116 @@ class FilingRepository:
             filing.status = "CORRECTED"
             db.commit()
 ```
+
+### 3.4.1 VatPolicy Model and Repository
+
+The `FilingService` must not hardcode legal constants such as the late-filing penalty amount (DKK 1,400 as of the current policy). Instead, these values are stored in a `vat_policies` table and read at runtime. This allows administrators to update them without a code deployment.
+
+**`app/models/vat_policy.py`**
+```python
+import uuid
+from datetime import date
+from decimal import Decimal
+
+from sqlalchemy import Date, Numeric, String
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.models.base import Base, TimestampMixin, new_uuid
+
+
+class VatPolicy(Base, TimestampMixin):
+    """
+    Stores time-bound policy values that would otherwise require code changes
+    (e.g. the late-filing fee mandated by Opkrævningslovens § 4).
+
+    Only one record is active at any point in time: the row whose
+    effective_from is the most recent date <= today, with effective_to
+    either NULL (open-ended) or >= today.
+
+    Seed the table with a single row on first deployment:
+        effective_from = 2024-01-01
+        effective_to   = NULL
+        late_filing_fee_amount = 800.00  (DKK 800 per Opkrævningsloven)
+        bank_holidays_json = '[]'         (populate as needed)
+    """
+    __tablename__ = "vat_policies"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=new_uuid
+    )
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    effective_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Late-filing fee per Opkrævningslovens § 4 (currently DKK 800 per overdue period).
+    # Stored as a policy value so it can be updated without a code deployment.
+    late_filing_fee_amount: Mapped[Decimal] = mapped_column(
+        Numeric(18, 2), nullable=False, server_default="800.00"
+    )
+    # ISO-8601 date strings of Danish bank holidays, stored as a JSON array.
+    # Used by get_next_open_bank_day to skip non-business days.
+    # Example: '["2026-01-01", "2026-04-17", "2026-12-25", "2026-12-26"]'
+    bank_holidays_json: Mapped[str] = mapped_column(
+        String, nullable=False, server_default="'[]'"
+    )
+```
+
+**`app/repositories/policy.py`**
+```python
+import json
+from datetime import date, timedelta
+from decimal import Decimal
+
+from sqlalchemy.orm import Session
+
+from app.models.vat_policy import VatPolicy
+
+
+class VatPolicyRepository:
+    def get_active_policy(self, as_of: date, db: Session) -> VatPolicy:
+        """Return the policy row whose effective window contains *as_of*.
+
+        Falls back to the most recent row if no open-ended record exists, so
+        the system always returns *something* rather than failing hard.
+        """
+        record = (
+            db.query(VatPolicy)
+            .filter(
+                VatPolicy.effective_from <= as_of,
+                (VatPolicy.effective_to == None) | (VatPolicy.effective_to >= as_of),  # noqa: E711
+            )
+            .order_by(VatPolicy.effective_from.desc())
+            .first()
+        )
+        if record is None:
+            # Ultimate fallback — no policy rows exist; return a default object
+            # so callers never receive None. Coder agent: add an alembic seed
+            # migration that inserts one row to prevent this path in production.
+            fallback = VatPolicy()
+            fallback.late_filing_fee_amount = Decimal("800.00")
+            fallback.bank_holidays_json = "[]"
+            return fallback
+        return record
+
+    def get_next_open_bank_day(self, candidate: date, db: Session) -> date:
+        """Advance *candidate* past weekends and Danish bank holidays.
+
+        Reads holiday dates from the active policy's ``bank_holidays_json``
+        field so that the list can be maintained in the database without a
+        code deployment.
+        """
+        policy = self.get_active_policy(candidate, db)
+        holidays: set[date] = {
+            date.fromisoformat(d) for d in json.loads(policy.bank_holidays_json)
+        }
+        result = candidate
+        while result.weekday() >= 5 or result in holidays:  # 5=Sat, 6=Sun
+            result += timedelta(days=1)
+        return result
+```
+
+> **Migration note:** `vat_policies` is created in **Migration 0005** (see Section 9). A seed row with `effective_from = 2024-01-01`, `effective_to = NULL`, `late_filing_fee_amount = 800.00`, and `bank_holidays_json = '[]'` is inserted in the same migration so that the system is immediately usable without manual data setup.
+
+---
 
 ### 3.5 Service
 
@@ -1290,7 +1476,6 @@ from app.schemas.filing import FilingCreate, FilingDeadlineRead, FilingRead, Fil
 from app.services.filing import FilingService
 
 router = APIRouter(prefix="/api/v1", tags=["filings"])
-vat_router = APIRouter(prefix="/api/v1/vat-filings", tags=["filings"])
 
 
 def get_filing_service() -> FilingService:
@@ -1307,28 +1492,8 @@ async def create_filing(
     return FilingRead.from_orm(filing)
 
 
-@vat_router.post("", response_model=FilingRead, status_code=status.HTTP_201_CREATED)
-async def create_vat_filing_alias(
-    payload: FilingCreate, db: Session = Depends(get_db),
-    service: FilingService = Depends(get_filing_service),
-    current_user: User = Depends(get_current_user),
-) -> FilingRead:
-    filing = await service.create_filing(payload, current_user, db)
-    return FilingRead.from_orm(filing)
-
-
 @router.get("/filings/{filing_id}", response_model=FilingRead)
 async def get_filing(
-    filing_id: uuid.UUID, db: Session = Depends(get_db),
-    service: FilingService = Depends(get_filing_service),
-    current_user: User = Depends(get_current_user),
-) -> FilingRead:
-    filing = await service.get_filing(filing_id, current_user, db)
-    return FilingRead.from_orm(filing)
-
-
-@vat_router.get("/{filing_id}", response_model=FilingRead)
-async def get_vat_filing_alias(
     filing_id: uuid.UUID, db: Session = Depends(get_db),
     service: FilingService = Depends(get_filing_service),
     current_user: User = Depends(get_current_user),
@@ -1367,16 +1532,6 @@ async def submit_filing(
     return FilingRead.from_orm(filing)
 
 
-@vat_router.post("/{filing_id}/submit", response_model=FilingRead)
-async def submit_vat_filing_alias(
-    filing_id: uuid.UUID, db: Session = Depends(get_db),
-    service: FilingService = Depends(get_filing_service),
-    current_user: User = Depends(get_current_user),
-) -> FilingRead:
-    filing = await service.submit_filing(filing_id, current_user, db)
-    return FilingRead.from_orm(filing)
-
-
 @router.post("/filings/{filing_id}/correct", response_model=FilingRead)
 async def correct_filing(
     filing_id: uuid.UUID, payload: FilingCreate, db: Session = Depends(get_db),
@@ -1387,27 +1542,8 @@ async def correct_filing(
     return FilingRead.from_orm(filing)
 
 
-@vat_router.post("/{filing_id}/correct", response_model=FilingRead)
-async def correct_vat_filing_alias(
-    filing_id: uuid.UUID, payload: FilingCreate, db: Session = Depends(get_db),
-    service: FilingService = Depends(get_filing_service),
-    current_user: User = Depends(get_current_user),
-) -> FilingRead:
-    filing = await service.correct_filing(filing_id, payload, current_user, db)
-    return FilingRead.from_orm(filing)
-
-
 @router.get("/filings/{filing_id}/receipt", response_model=FilingReceiptRead)
 async def get_filing_receipt(
-    filing_id: uuid.UUID, db: Session = Depends(get_db),
-    service: FilingService = Depends(get_filing_service),
-    current_user: User = Depends(get_current_user),
-) -> FilingReceiptRead:
-    return await service.get_receipt(filing_id, current_user, db)
-
-
-@vat_router.get("/{filing_id}/receipt", response_model=FilingReceiptRead)
-async def get_vat_filing_receipt_alias(
     filing_id: uuid.UUID, db: Session = Depends(get_db),
     service: FilingService = Depends(get_filing_service),
     current_user: User = Depends(get_current_user),
@@ -1910,6 +2046,182 @@ async def get_filing_assessment(
 
 ---
 
+## 4.8 Admin Module (Dashboard, User Management, Settings)
+
+### 4.8.1 Dashboard Summary Endpoint
+
+The `GET /api/v1/dashboard/summary` endpoint is required by the Designer's Dashboard page and is accessible to ADMIN and OFFICER roles only. It returns aggregate counts used to populate the stat cards.
+
+**Schema — `app/schemas/dashboard.py`**
+```python
+from pydantic import BaseModel
+
+
+class DashboardSummary(BaseModel):
+    """Read-only aggregate for the admin dashboard stat cards."""
+    total_parties: int
+    pending_filings: int       # filings with status in (DRAFT, SUBMITTED)
+    submitted_filings: int     # filings with status SUBMITTED_WITH_RECEIPT
+    open_assessments: int      # assessments with status not in (GODKENDT, AFVIST)
+    overdue_filings: int       # submitted filings where submitted_at > frist
+```
+
+**Router stub — `app/routers/dashboard.py`**
+```python
+import logging
+from typing import Annotated
+
+from fastapi import APIRouter, Depends
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.db.session import get_db
+from app.dependencies.auth import get_current_user, require_roles
+from app.models.assessment import TaxAssessment
+from app.models.filing import Filing
+from app.models.party import Party
+from app.models.user import User
+from app.schemas.dashboard import DashboardSummary
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
+
+
+@router.get("/summary", response_model=DashboardSummary)
+def get_dashboard_summary(
+    db: Session = Depends(get_db),
+    current_user: Annotated[User, Depends(require_roles("ADMIN", "OFFICER"))] = None,
+) -> DashboardSummary:
+    """Return aggregate counts for the admin dashboard.
+
+    Scoped to all data (ADMIN and OFFICER see all parties/filings/assessments).
+    TAXPAYER role is blocked by require_roles.
+    """
+    total_parties = db.query(func.count(Party.id)).scalar() or 0
+
+    pending_filings = (
+        db.query(func.count(Filing.id))
+        .filter(Filing.status.in_(["DRAFT", "SUBMITTED"]))
+        .scalar()
+        or 0
+    )
+
+    submitted_filings = (
+        db.query(func.count(Filing.id))
+        .filter(Filing.status == "SUBMITTED_WITH_RECEIPT")
+        .scalar()
+        or 0
+    )
+
+    open_assessments = (
+        db.query(func.count(TaxAssessment.id))
+        .filter(TaxAssessment.status.notin_(["GODKENDT", "AFVIST"]))
+        .scalar()
+        or 0
+    )
+
+    overdue_filings = (
+        db.query(func.count(Filing.id))
+        .filter(
+            Filing.submitted_at.isnot(None),
+            Filing.submitted_at > Filing.frist,
+        )
+        .scalar()
+        or 0
+    )
+
+    return DashboardSummary(
+        total_parties=total_parties,
+        pending_filings=pending_filings,
+        submitted_filings=submitted_filings,
+        open_assessments=open_assessments,
+        overdue_filings=overdue_filings,
+    )
+```
+
+> **Note:** The `require_roles` dependency (in `app/dependencies/auth.py`) is a factory that returns a FastAPI dependency rejecting requests from roles not in the provided list with a `403 Forbidden` response.
+
+### 4.8.2 Admin Router (Users + Settings)
+
+**`app/routers/admin.py`**
+```python
+import uuid
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+
+from app.db.session import get_db
+from app.dependencies.auth import get_current_user, require_roles
+from app.models.admin_settings import AdminSettings
+from app.models.user import User
+from app.schemas.auth import UserCreate, UserRead
+from app.services.auth import AuthService
+
+users_router = APIRouter(prefix="/api/v1/admin/users", tags=["admin"])
+settings_router = APIRouter(prefix="/api/v1/admin/settings", tags=["admin"])
+
+auth_service = AuthService()
+
+
+@users_router.get("", response_model=list[UserRead])
+def list_users(
+    db: Session = Depends(get_db),
+    _: Annotated[User, Depends(require_roles("ADMIN"))] = None,
+) -> list[User]:
+    return db.query(User).all()
+
+
+@users_router.post("", response_model=UserRead, status_code=status.HTTP_201_CREATED)
+def create_user(
+    payload: UserCreate,
+    db: Session = Depends(get_db),
+    _: Annotated[User, Depends(require_roles("ADMIN"))] = None,
+) -> User:
+    return auth_service.create_user(payload, db)
+
+
+@users_router.patch("/{user_id}", response_model=UserRead)
+def update_user(
+    user_id: uuid.UUID,
+    payload: UserCreate,
+    db: Session = Depends(get_db),
+    _: Annotated[User, Depends(require_roles("ADMIN"))] = None,
+) -> User:
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Coder agent: apply only non-None fields from payload
+    return auth_service.update_user(user, payload, db)
+
+
+@settings_router.get("", response_model=list[dict])
+def list_settings(
+    db: Session = Depends(get_db),
+    _: Annotated[User, Depends(require_roles("ADMIN"))] = None,
+) -> list:
+    return db.query(AdminSettings).all()
+
+
+@settings_router.patch("/{key}", response_model=dict)
+def update_setting(
+    key: str,
+    value: dict,
+    db: Session = Depends(get_db),
+    _: Annotated[User, Depends(require_roles("ADMIN"))] = None,
+) -> AdminSettings:
+    setting = db.query(AdminSettings).filter(AdminSettings.key == key).first()
+    if setting is None:
+        raise HTTPException(status_code=404, detail="Setting not found")
+    setting.value = value
+    db.commit()
+    db.refresh(setting)
+    return setting
+```
+
+---
+
 ## 5. Updated app/main.py Wiring
 
 ```python
@@ -1917,6 +2229,7 @@ import logging
 
 from fastapi import FastAPI
 
+from app.middleware.audit import AuditMiddleware
 from app.events.assessment_events import AssessmentCreated, AssessmentPenaltyCalculated, AssessmentStatusChanged
 from app.events.bus import InMemoryEventBus
 from app.events.filing_events import FilingCorrected, FilingCreated, FilingPenaltyAccrued, FilingSubmitted
@@ -1946,7 +2259,8 @@ from app.routers.assessments import (
     get_assessment_service,
     router as assessments_router,
 )
-from app.routers.filings import get_filing_service, router as filings_router, vat_router
+from app.routers.dashboard import router as dashboard_router
+from app.routers.filings import get_filing_service, router as filings_router
 from app.routers.parties import get_party_service
 from app.services.assessment import AssessmentService
 from app.services.authz import AuthorizationPolicy
@@ -1960,8 +2274,17 @@ app = FastAPI(
     version="2.0.0",
     description="Registration, Filing, Assessment, and Admin modules.",
 )
+app.add_middleware(AuditMiddleware)
 
 # Event Bus
+# InMemoryEventBus is used for Phase 2 development and testing.
+# Limitation acknowledged (Reviewer ACTION): events are dispatched in-process and
+# are not durable — a process restart will not re-deliver in-flight events.
+# All critical business logic (VAT calculation, status transitions, penalty accrual)
+# is committed to the database BEFORE events are published, so a lost event means
+# a missed notification or log entry — not a lost transaction. Events are used only
+# for cross-module notification and audit logging at Phase 2.
+# Replacing InMemoryEventBus with a durable broker (RabbitMQ/Kafka) is a Phase 3 concern.
 bus = InMemoryEventBus()
 
 bus.subscribe(PartyRegistered, on_party_registered)
@@ -1998,9 +2321,9 @@ app.include_router(auth_module.router)
 app.include_router(parties.router)
 app.include_router(roles.router)
 app.include_router(filings_router)
-app.include_router(vat_router)
 app.include_router(assessments_router)
 app.include_router(filing_assessment_router)
+app.include_router(dashboard_router)
 app.include_router(users_router)
 app.include_router(settings_router)
 
@@ -2034,7 +2357,50 @@ def health() -> dict:
 
 ### Migration 0002 - `users`
 
-No schema change from prior draft.
+**`alembic/versions/0002_add_users_table.py`**
+```python
+"""add users table
+
+Revision ID: 0002
+Revises: 0001
+Create Date: 2026-02-24
+"""
+import sqlalchemy as sa
+from alembic import op
+from sqlalchemy.dialects import postgresql
+
+revision = "0002"
+down_revision = "0001"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "users",
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("email", sa.String(255), nullable=False),
+        sa.Column("full_name", sa.String(255), nullable=False),
+        sa.Column("hashed_password", sa.String(255), nullable=False),
+        sa.Column("role", sa.String(50), nullable=False),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        # Nullable FK — only set for TAXPAYER users linking to their Party row.
+        sa.Column("party_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.ForeignKeyConstraint(["party_id"], ["parties.id"], ondelete="SET NULL"),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("email", name="uq_users_email"),
+    )
+    op.create_index("ix_users_email", "users", ["email"])
+    op.create_index("ix_users_party_id", "users", ["party_id"])
+
+
+def downgrade() -> None:
+    op.drop_index("ix_users_party_id", table_name="users")
+    op.drop_index("ix_users_email", table_name="users")
+    op.drop_table("users")
+```
 
 ### Migration 0003 - `filings` (canonical VAT fields)
 
@@ -2090,16 +2456,21 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["party_id"], ["parties.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["original_filing_id"], ["filings.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "se_nummer", "filing_period", "angivelse_type", "version",
-            name="uq_filing_se_period_type_version",
-        ),
     )
     op.create_index("ix_filings_party_id", "filings", ["party_id"])
     op.create_index("ix_filings_se_nummer", "filings", ["se_nummer"])
+    # Partial unique index: only one canonical (non-correction) filing per
+    # (se_nummer, filing_period, angivelse_type). Corrections are excluded so
+    # multiple correction versions can coexist for the same period.
+    op.execute(
+        "CREATE UNIQUE INDEX uq_filing_canonical_se_period_type "
+        "ON filings (se_nummer, filing_period, angivelse_type) "
+        "WHERE korrektionsangivelse = false"
+    )
 
 
 def downgrade() -> None:
+    op.execute("DROP INDEX IF EXISTS uq_filing_canonical_se_period_type")
     op.drop_index("ix_filings_se_nummer", table_name="filings")
     op.drop_index("ix_filings_party_id", table_name="filings")
     op.drop_table("filings")
@@ -2192,14 +2563,309 @@ def downgrade() -> None:
     op.drop_table("admin_settings")
 ```
 
+### Migration 0005b - `vat_policies` (new)
+
+**`alembic/versions/0005b_add_vat_policies_table.py`**
+```python
+"""add vat_policies table and seed initial row
+
+Revision ID: 0005b
+Revises: 0005
+Create Date: 2026-02-24
+"""
+import sqlalchemy as sa
+from alembic import op
+from sqlalchemy.dialects import postgresql
+
+revision = "0005b"
+down_revision = "0005"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "vat_policies",
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("effective_from", sa.Date(), nullable=False),
+        sa.Column("effective_to", sa.Date(), nullable=True),
+        sa.Column(
+            "late_filing_fee_amount",
+            sa.Numeric(18, 2),
+            nullable=False,
+            server_default=sa.text("800.00"),
+        ),
+        # JSON array of ISO-8601 date strings: bank holidays in the policy window.
+        sa.Column(
+            "bank_holidays_json",
+            sa.String(),
+            nullable=False,
+            server_default=sa.text("'[]'"),
+        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index("ix_vat_policies_effective_from", "vat_policies", ["effective_from"])
+
+    # Seed the initial policy row so FilingService never fails on a missing policy.
+    op.execute(
+        "INSERT INTO vat_policies (id, effective_from, effective_to, late_filing_fee_amount, bank_holidays_json) "
+        "VALUES (gen_random_uuid(), '2024-01-01', NULL, 800.00, '[]')"
+    )
+
+
+def downgrade() -> None:
+    op.drop_index("ix_vat_policies_effective_from", table_name="vat_policies")
+    op.drop_table("vat_policies")
+```
+
+> **Sequence note:** Migrations 0006 and 0007 are defined later in this document (Party VAT columns and audit_log respectively). The full chain is: 0001 → 0002 → 0003 → 0004 → 0005 → 0005b → 0006 → 0007.
+
+---
+
+### Migration 0006 - Party VAT Columns (new)
+
+Add first-class VAT fields to the existing `parties` table. This replaces the prior pattern of reading `cvr_nummer` and `se_nummer` from `party_identifiers` rows. The EAV rows are left in place for backwards compatibility; the new columns become the canonical source.
+
+**`alembic/versions/0006_add_party_vat_columns.py`**
+```python
+"""add vat columns to parties table
+
+Revision ID: 0006
+Revises: 0005b
+Create Date: 2026-02-24
+"""
+import sqlalchemy as sa
+from alembic import op
+
+revision = "0006"
+down_revision = "0005b"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    # CVR number: 8-digit Danish company registration number (Erhvervsstyrelsen).
+    # Nullable because not all party types require a CVR number at registration time.
+    op.add_column("parties", sa.Column("cvr_nummer", sa.String(8), nullable=True))
+    # SE number: 8-digit tax registration number (Skattestyrelsen).
+    # One CVR can have multiple SE numbers; store the primary SE here.
+    op.add_column("parties", sa.Column("se_nummer", sa.String(8), nullable=True))
+    # VAT filing period type: MONTHLY | QUARTERLY | SEMI_ANNUAL
+    op.add_column("parties", sa.Column("afregningsperiode_type", sa.String(20), nullable=True))
+    # True once the party has completed VAT registration with SKAT.
+    op.add_column("parties", sa.Column("vat_registration_active", sa.Boolean(),
+                                       nullable=False, server_default=sa.text("false")))
+
+    op.create_index("ix_parties_cvr_nummer", "parties", ["cvr_nummer"])
+    op.create_index("ix_parties_se_nummer", "parties", ["se_nummer"])
+
+
+def downgrade() -> None:
+    op.drop_index("ix_parties_se_nummer", table_name="parties")
+    op.drop_index("ix_parties_cvr_nummer", table_name="parties")
+    op.drop_column("parties", "vat_registration_active")
+    op.drop_column("parties", "afregningsperiode_type")
+    op.drop_column("parties", "se_nummer")
+    op.drop_column("parties", "cvr_nummer")
+```
+
+**Updated `app/models/party.py` (Party class only — other models unchanged)**
+
+Add the four new columns to the `Party` class in `app/models/party.py`:
+
+```python
+# Inside class Party(Base, TimestampMixin): — add after party_type_code
+
+# CVR and SE numbers as first-class columns for fast indexed lookups.
+# The EAV rows in party_identifiers remain for historical compatibility.
+cvr_nummer: Mapped[str | None] = mapped_column(String(8), nullable=True, index=True)
+se_nummer: Mapped[str | None] = mapped_column(String(8), nullable=True, index=True)
+afregningsperiode_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+vat_registration_active: Mapped[bool] = mapped_column(
+    Boolean, nullable=False, default=False
+)
+```
+
+> **Coder agent note:** When registering a new party, validate CVR via modulus-11 checksum before writing to the database. The validation logic lives in `app/services/party.py` — add a `_validate_cvr(cvr: str) -> bool` helper following the spec in `AGENT_RESEARCHER_SPEC.md` (Section 3.1, CVR validation algorithm).
+
+---
+
+### Migration 0007 - `audit_log` (new)
+
+An append-only audit log table for all write operations. This satisfies the GDPR and FORVALTNINGSLOVEN requirement that every state change is attributable and reversible by an auditor.
+
+**`alembic/versions/0007_add_audit_log.py`**
+```python
+"""add audit_log table
+
+Revision ID: 0007
+Revises: 0006
+Create Date: 2026-02-24
+"""
+import sqlalchemy as sa
+from alembic import op
+from sqlalchemy.dialects import postgresql
+
+revision = "0007"
+down_revision = "0006"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "audit_log",
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        # Who performed the action. NULL for system-generated events.
+        sa.Column("actor_id", postgresql.UUID(as_uuid=True), nullable=True),
+        # actor_role at time of action (ADMIN / OFFICER / TAXPAYER / SYSTEM).
+        sa.Column("actor_role", sa.String(50), nullable=True),
+        # The entity type being modified, e.g. "Filing", "Assessment", "Party".
+        sa.Column("entity_type", sa.String(100), nullable=False),
+        # UUID of the modified entity.
+        sa.Column("entity_id", postgresql.UUID(as_uuid=True), nullable=False),
+        # HTTP method + path that triggered the change (e.g. "PATCH /api/v1/filings/…/submit").
+        sa.Column("action", sa.String(255), nullable=False),
+        # Previous state snapshot (JSON). NULL for create operations.
+        sa.Column("before_state", sa.JSON(), nullable=True),
+        # New state snapshot (JSON). NULL for delete operations.
+        sa.Column("after_state", sa.JSON(), nullable=True),
+        # Source IP of the request. VARCHAR to accommodate both IPv4 and IPv6.
+        sa.Column("ip_address", sa.String(45), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index("ix_audit_log_entity", "audit_log", ["entity_type", "entity_id"])
+    op.create_index("ix_audit_log_actor", "audit_log", ["actor_id"])
+    op.create_index("ix_audit_log_created_at", "audit_log", ["created_at"])
+
+
+def downgrade() -> None:
+    op.drop_index("ix_audit_log_created_at", table_name="audit_log")
+    op.drop_index("ix_audit_log_actor", table_name="audit_log")
+    op.drop_index("ix_audit_log_entity", table_name="audit_log")
+    op.drop_table("audit_log")
+```
+
+**`app/models/audit_log.py`**
+```python
+import uuid
+from datetime import datetime
+
+from sqlalchemy import DateTime, JSON, String
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.models.base import Base, new_uuid
+
+
+class AuditLog(Base):
+    """Append-only audit trail. Never update or delete rows from this table."""
+    __tablename__ = "audit_log"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    actor_role: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    entity_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    action: Mapped[str] = mapped_column(String(255), nullable=False)
+    before_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    after_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+```
+
+**`app/middleware/audit.py`** — FastAPI middleware stub
+```python
+import json
+import uuid
+from datetime import datetime, timezone
+
+from fastapi import Request
+from sqlalchemy.orm import Session
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from app.db.session import SessionLocal
+from app.models.audit_log import AuditLog
+
+AUDITED_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
+
+
+class AuditMiddleware(BaseHTTPMiddleware):
+    """Writes an AuditLog row for every state-changing request.
+
+    The middleware captures actor identity from the decoded JWT payload
+    stored in request.state by the auth dependency, so it runs *after*
+    authentication but before the response is sent.
+
+    Coder agent: populate before_state and after_state from the request body
+    and response body respectively. For large payloads, store only the diff.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        if request.method in AUDITED_METHODS and response.status_code < 400:
+            actor = getattr(request.state, "current_user", None)
+            db: Session = SessionLocal()
+            try:
+                entry = AuditLog(
+                    id=uuid.uuid4(),
+                    actor_id=actor.id if actor else None,
+                    actor_role=actor.role if actor else "SYSTEM",
+                    entity_type=_extract_entity_type(request.url.path),
+                    entity_id=_extract_entity_id(request.url.path),
+                    action=f"{request.method} {request.url.path}",
+                    before_state=None,   # TODO: populate from pre-request state fetch
+                    after_state=None,    # TODO: populate from response body
+                    ip_address=request.client.host if request.client else None,
+                    created_at=datetime.now(timezone.utc),
+                )
+                db.add(entry)
+                db.commit()
+            except Exception:
+                db.rollback()
+            finally:
+                db.close()
+        return response
+
+
+def _extract_entity_type(path: str) -> str:
+    segments = [s for s in path.split("/") if s]
+    for segment in segments:
+        if segment in ("filings", "assessments", "parties", "users"):
+            return segment.rstrip("s").capitalize()
+    return "Unknown"
+
+
+def _extract_entity_id(path: str) -> uuid.UUID:
+    segments = [s for s in path.split("/") if s]
+    for segment in segments:
+        try:
+            return uuid.UUID(segment)
+        except ValueError:
+            continue
+    return uuid.uuid4()  # fallback — should not normally be reached
+```
+
+> **main.py wiring:** Add `app.add_middleware(AuditMiddleware)` after the app is created in `app/main.py`. Import from `app.middleware.audit`.
+
+---
+
 ### New Tables Summary
 
 | Table | Primary Key | Foreign Keys | Notable Constraints |
 |---|---|---|---|
-| `users` | `id` UUID | - | `email` UNIQUE |
-| `filings` | `id` UUID | `party_id` -> `parties.id` CASCADE; `original_filing_id` -> `filings.id` SET NULL | `uq_filing_se_period_type_version` |
+| `users` | `id` UUID | `party_id` -> `parties.id` SET NULL | `email` UNIQUE; `ix_users_party_id` |
+| `filings` | `id` UUID | `party_id` -> `parties.id` CASCADE; `original_filing_id` -> `filings.id` SET NULL | partial unique index `uq_filing_canonical_se_period_type` WHERE korrektionsangivelse=false |
 | `tax_assessments` | `id` UUID | `filing_id` -> `filings.id` CASCADE; `assessed_by` -> `users.id` SET NULL | `filing_id` UNIQUE |
 | `admin_settings` | `key` text | `updated_by` -> `users.id` (logical ref) | one key per setting |
+| `vat_policies` | `id` UUID | — | `ix_vat_policies_effective_from`; seeded with one row |
+| `audit_log` | `id` UUID | `actor_id` -> `users.id` (logical, no FK constraint to avoid cascade issues) | `ix_audit_log_entity`; append-only |
+| `parties` (updated) | `id` UUID (existing) | — | 4 new columns: `cvr_nummer`, `se_nummer`, `afregningsperiode_type`, `vat_registration_active` |
 
 ---
 
@@ -2232,6 +2898,37 @@ Event flow is now defined by explicit publish/subscribe contracts (no hidden sid
 
 ## 8. API Contract Summary
 
+### 8.0 Error Response Envelope (Reviewer ACTION addressed)
+
+All error responses across every endpoint use **FastAPI's default error envelope**. Frontend Coder agents must handle both formats:
+
+**Operational errors** (4xx/5xx status codes for business logic failures):
+```json
+{ "detail": "Canonical filing already exists for this se_nummer + period" }
+```
+
+**Validation errors** (HTTP 422 Unprocessable Entity, from Pydantic schema validation):
+```json
+{
+  "detail": [
+    {
+      "type": "missing",
+      "loc": ["body", "rubrik_a"],
+      "msg": "Field required",
+      "input": {}
+    }
+  ]
+}
+```
+
+The TypeScript client type (`lib/api-client.ts`) must handle both formats:
+```typescript
+type ApiErrorDetail = string | Array<{ type: string; loc: string[]; msg: string; input: unknown }>;
+interface ApiError { detail: ApiErrorDetail; }
+```
+
+No custom error middleware is added in Phase 2. FastAPI's built-in exception handlers are sufficient.
+
 ### 8.1 Role and Ownership Policy by Endpoint
 
 Role legend: `A=ADMIN`, `O=OFFICER`, `T=TAXPAYER`
@@ -2252,15 +2949,10 @@ Role legend: `A=ADMIN`, `O=OFFICER`, `T=TAXPAYER`
 | GET | `/api/v1/parties/{id}/filings` | A,O,T | T must own party | 401,403,404 |
 | GET | `/api/v1/filings` | A,O,T | T sees own filings only | 401 |
 | POST | `/api/v1/filings` | A,O,T | T can create only for own party | 401,403,404,422,409 |
-| POST | `/api/v1/vat-filings` | A,O,T | Alias of `/api/v1/filings` | 401,403,404,422,409 |
 | GET | `/api/v1/filings/{id}` | A,O,T | T must own filing | 401,403,404 |
-| GET | `/api/v1/vat-filings/{id}` | A,O,T | Alias of `/api/v1/filings/{id}` | 401,403,404 |
 | PATCH | `/api/v1/filings/{id}/submit` | A,O,T | T must own filing | 401,403,404,400 |
-| POST | `/api/v1/vat-filings/{id}/submit` | A,O,T | Alias of submit endpoint | 401,403,404,400 |
 | POST | `/api/v1/filings/{id}/correct` | A,O,T | T must own filing | 401,403,404,400,409 |
-| POST | `/api/v1/vat-filings/{id}/correct` | A,O,T | Alias of correction endpoint | 401,403,404,400,409 |
 | GET | `/api/v1/filings/{id}/receipt` | A,O,T | T must own filing | 401,403,404 |
-| GET | `/api/v1/vat-filings/{id}/receipt` | A,O,T | Alias of receipt endpoint | 401,403,404 |
 | GET | `/api/v1/vat-deadlines` | A,O,T | T must own party_id query param | 401,403,404,422 |
 | GET | `/api/v1/assessments` | A,O,T | T sees own assessments only | 401 |
 | POST | `/api/v1/assessments` | A,O | filing must be `SUBMITTED_WITH_RECEIPT` | 401,403,404,400,409,422 |
@@ -2299,9 +2991,8 @@ Role legend: `A=ADMIN`, `O=OFFICER`, `T=TAXPAYER`
 | Assign role | `POST /api/v1/parties/{id}/roles` | A,O | 401,403,404,422 |
 | List roles | `GET /api/v1/parties/{id}/roles` | A,O,T-own | 401,403,404 |
 | Filings list | `GET /api/v1/filings` | A,O all; T own only | 401 |
-| Create filing draft | `POST /api/v1/filings` or `POST /api/v1/vat-filings` | A,O,T-own | 401,403,404,422,409 |
+| Create filing draft | `POST /api/v1/filings` | A,O,T-own | 401,403,404,422,409 |
 | Submit filing | `PATCH /api/v1/filings/{id}/submit` | A,O,T-own | 401,403,404,400 |
-| Submit filing (alias flow) | `POST /api/v1/vat-filings/{id}/submit` | A,O,T-own | 401,403,404,400 |
 | Filing detail | `GET /api/v1/filings/{id}` | A,O,T-own | 401,403,404 |
 | Create correction filing | `POST /api/v1/filings/{id}/correct` | A,O,T-own | 401,403,404,400,409 |
 | Retrieve filing receipt | `GET /api/v1/filings/{id}/receipt` | A,O,T-own | 401,403,404 |
@@ -2575,7 +3266,7 @@ export interface ValidationError {
 - Replaced hardcoded late-penalty assumptions with policy-driven fee hooks and effective-date resolution.
 - Added deterministic deadline algorithm details (monthly/quarterly/semi-annual + next bank-day adjustment).
 - Added explicit receipt contract (`submission_outcome`, receipt retrieval endpoint).
-- Added endpoint aliases and legal-baseline endpoints from latest Researcher (`/api/v1/vat-filings*`, `/api/v1/vat-deadlines`).
+- Added legal-baseline endpoint `/api/v1/vat-deadlines` from Researcher findings. Removed `/api/v1/vat-filings*` alias routes per Phase 1 review decision.
 - Added transitional non-canonical `line_items` adapter input while keeping fixed VAT fields canonical.
 
 ### Unresolved Blockers

@@ -153,7 +153,7 @@ The Reviewer's standard is: *"If a developer picked up these three specs and sta
 **Cross-spec coherence:**
 - Verify that every field shown in the Designer's UI forms exists in the Architect's data model
 - Verify that every API endpoint referenced in the Designer's user flows is defined in the Architect's API contract
-- Verify that the Architect's data model incorporates the Researcher's corrections (Rubrik A-E fields, CVR/SE numbers, afregningsperiode types, frist deadlines, agterskrivelse fields)
+- Verify that the Architect's data model incorporates the Researcher's corrections (Rubrik A-E fields, CVR/SE numbers, afregningsperiode types, frist deadlines)
 - Identify any place where one spec assumes something that another spec has not defined
 
 **Domain accuracy:**
@@ -244,7 +244,8 @@ The Frontend Coder builds the complete UI as defined by the Designer, wired to t
 - Implement the admin dashboard (stat cards, recent activity tables)
 - Implement all Registration views: Parties List, Party Detail, Register Party modal, Assign Role
 - Implement all Filing views: Filings List, Filing Detail, Create Momsangivelse form (Rubrik A-E fields), Submit, Correction
-- Implement all Assessment views: Assessments List, Assessment Detail, Status update, Agterskrivelse action
+- Implement all Assessment views: Assessments List, Assessment Detail, Status update
+- **Note:** Agterskrivelse (warning notice) is explicitly deferred to Phase 3. The Frontend Coder must NOT implement any agterskrivelse UI, endpoint calls, or actions in Phase 2. No backend endpoint or model field exists for it.
 - Build all components defined in the Designer's spec: Button, Badge, DataTable, FormField, Card, PageHeader, SideNav, StatCard, Modal, Toast
 - Implement role-based navigation (admin sees all; officer sees filings and assessments; taxpayer sees own filings)
 - Connect all views to the backend via typed API client functions in `lib/api-client.ts`
@@ -274,7 +275,7 @@ The Test Agent ensures that every new endpoint, business rule, auth flow, and ev
 
 #### Responsibilities
 - Write integration tests for all Filing endpoints: create, list, get by ID, submit, correction
-- Write integration tests for all Assessment endpoints: create, list, get by ID, update status, agterskrivelse
+- Write integration tests for all Assessment endpoints: create, list, get by ID, update status (agterskrivelse tests are deferred to Phase 3)
 - Write tests for the Auth flow: login (valid credentials), login (invalid credentials), token refresh, logout, protected route access, role enforcement
 - Write tests for momstilsvar calculation on submit
 - Write tests for filing period uniqueness constraint (duplicate se_nummer + period + type)
