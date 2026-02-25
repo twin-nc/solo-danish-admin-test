@@ -86,6 +86,12 @@ def test_list_roles_empty(client, registered_party):
     assert response.json() == []
 
 
+def test_list_roles_party_not_found(client):
+    response = client.get(f"/api/v1/parties/{uuid.uuid4()}/roles")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Party not found"
+
+
 def test_assign_role_party_not_found(client):
     payload = {
         "party_role_type_code": "BUSINSSDM1",

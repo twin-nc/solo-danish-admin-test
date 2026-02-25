@@ -1,15 +1,8 @@
-"""
-Integration tests for PartyRepository.
+import uuid
 
-Scope: ORM ↔ schema correctness, cascade behaviour, and constraint enforcement.
-Requires a real PostgreSQL test database (provided by the `db` fixture in conftest.py).
-
-Testing Agent: fill in tests below using the `db` session fixture.
-Each test is wrapped in a savepoint transaction — all writes are rolled back
-automatically after the test completes.
-"""
-
+from app.models.party import PartyIdentifier
 from app.repositories.party import PartyRepository
+from app.schemas.party import PartyCreate
 
 PARTY_PAYLOAD = {
     "partyTypeCode": "ORGADM1",
@@ -23,41 +16,92 @@ PARTY_PAYLOAD = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Checkpoint A — schema / contract stubs
-# ---------------------------------------------------------------------------
+def _payload_with(identifier_value: str, email: str, name: str) -> PartyCreate:
+    payload = {
+        **PARTY_PAYLOAD,
+        "identifiers": [{"identifierTypeCL": "TIN", "identifierValue": identifier_value}],
+        "contacts": [{"contactValue": email}],
+        "names": [{"name": name, "isAlias": False}],
+    }
+    return PartyCreate(**payload)
 
 
 def test_create_party_persists_to_database(db):
-    """Repository must write a Party row and return it with a populated id."""
-    pass  # TODO (Testing Agent): call repo.create_party, assert row has UUID id
+    repo = PartyRepository()
+    payload = PartyCreate(**PARTY_PAYLOAD)
+
+    party = repo.create_party(payload=payload, db=db)
+    fetched = repo.get_party_by_id(party.id, db)
+
+    assert party.id is not None
+    assert fetched is not None
+    assert fetched.id == party.id
+    assert fetched.party_type_code == "ORGADM1"
 
 
 def test_create_party_persists_child_rows(db):
-    """Identifiers, classifications, states, contacts, and names must all be saved."""
-    pass  # TODO (Testing Agent): assert len(party.identifiers) == 1, etc.
+    repo = PartyRepository()
+    payload = PartyCreate(**PARTY_PAYLOAD)
 
+    party = repo.create_party(payload=payload, db=db)
 
-# ---------------------------------------------------------------------------
-# Checkpoint B — retrieval stubs
-# ---------------------------------------------------------------------------
+    assert len(party.identifiers) == 1
+    assert party.identifiers[0].identifier_type_cl == "TIN"
+    assert party.identifiers[0].identifier_value == "9999-111111111"
+    assert len(party.classifications) == 1
+    assert party.classifications[0].party_classification_type_cl == "BUSINESS_SIZE"
+    assert len(party.states) == 1
+    assert party.states[0].party_state_cl == "IN_BUSINESS"
+    assert len(party.contacts) == 1
+    assert party.contacts[0].contact_value == "repo-test@virksomhed.dk"
+    assert len(party.names) == 1
+    assert party.names[0].name == "Repo Test ApS"
 
 
 def test_get_party_by_id_returns_correct_record(db):
-    """Repository must return the exact party that was created."""
-    pass  # TODO (Testing Agent): create then fetch, compare id
+    repo = PartyRepository()
+    payload = PartyCreate(**PARTY_PAYLOAD)
+    created = repo.create_party(payload=payload, db=db)
+
+    fetched = repo.get_party_by_id(created.id, db)
+
+    assert fetched is not None
+    assert fetched.id == created.id
 
 
 def test_get_party_by_id_returns_none_for_unknown(db):
-    """Repository must return None (not raise) when no record exists."""
-    pass  # TODO (Testing Agent): fetch with a random UUID, assert result is None
+    repo = PartyRepository()
 
+    fetched = repo.get_party_by_id(uuid.uuid4(), db)
 
-# ---------------------------------------------------------------------------
-# Checkpoint C — constraint / cascade stubs
-# ---------------------------------------------------------------------------
+    assert fetched is None
 
 
 def test_create_party_identifier_uniqueness(db):
-    """Two parties may share an identifier value — uniqueness is per-party."""
-    pass  # TODO (Testing Agent): create two parties with same TIN value, assert both saved
+    repo = PartyRepository()
+    shared_identifier = "7777-123456789"
+    first = repo.create_party(
+        payload=_payload_with(
+            identifier_value=shared_identifier,
+            email="first@virksomhed.dk",
+            name="First Company ApS",
+        ),
+        db=db,
+    )
+    second = repo.create_party(
+        payload=_payload_with(
+            identifier_value=shared_identifier,
+            email="second@virksomhed.dk",
+            name="Second Company ApS",
+        ),
+        db=db,
+    )
+
+    identifier_rows = (
+        db.query(PartyIdentifier)
+        .filter(PartyIdentifier.identifier_value == shared_identifier)
+        .all()
+    )
+
+    assert first.id != second.id
+    assert len(identifier_rows) == 2

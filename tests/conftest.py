@@ -67,10 +67,13 @@ def db(test_engine):
 @pytest.fixture
 def client(db):
     """TestClient with get_db overridden to use the test session."""
+
     def override_get_db():
         yield db
 
     fastapi_app.dependency_overrides[get_db] = override_get_db
-    with TestClient(fastapi_app) as c:
-        yield c
-    del fastapi_app.dependency_overrides[get_db]
+    try:
+        with TestClient(fastapi_app) as c:
+            yield c
+    finally:
+        fastapi_app.dependency_overrides.pop(get_db, None)
