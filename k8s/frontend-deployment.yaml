@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vatri-frontend
+  namespace: vatri
+  labels:
+    app: vatri-frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: vatri-frontend
+  template:
+    metadata:
+      labels:
+        app: vatri-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: ghcr.io/vatri/vatri-frontend:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: BACKEND_URL
+              value: "http://vatri-backend.vatri.svc.cluster.local"
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
