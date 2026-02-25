@@ -19,13 +19,18 @@ def test_health(client):
     assert response.json() == {"status": "ok"}
 
 
-def test_register_party_returns_201(client):
+def test_register_party_requires_auth(client):
     response = client.post("/api/v1/parties", json=PARTY_PAYLOAD)
+    assert response.status_code == 401
+
+
+def test_register_party_returns_201(authenticated_client):
+    response = authenticated_client.post("/api/v1/parties", json=PARTY_PAYLOAD)
     assert response.status_code == 201
 
 
-def test_register_party_response_shape(client):
-    response = client.post("/api/v1/parties", json=PARTY_PAYLOAD)
+def test_register_party_response_shape(authenticated_client):
+    response = authenticated_client.post("/api/v1/parties", json=PARTY_PAYLOAD)
     data = response.json()
 
     assert "id" in data
@@ -43,34 +48,34 @@ def test_register_party_response_shape(client):
     assert data["names"][0]["isAlias"] is False
 
 
-def test_register_party_assigns_uuid(client):
-    response = client.post("/api/v1/parties", json=PARTY_PAYLOAD)
+def test_register_party_assigns_uuid(authenticated_client):
+    response = authenticated_client.post("/api/v1/parties", json=PARTY_PAYLOAD)
     party_id = response.json()["id"]
     # Should be a valid UUID
     uuid.UUID(party_id)
 
 
-def test_get_party(client):
-    create_resp = client.post("/api/v1/parties", json=PARTY_PAYLOAD)
+def test_get_party(authenticated_client):
+    create_resp = authenticated_client.post("/api/v1/parties", json=PARTY_PAYLOAD)
     party_id = create_resp.json()["id"]
 
-    get_resp = client.get(f"/api/v1/parties/{party_id}")
+    get_resp = authenticated_client.get(f"/api/v1/parties/{party_id}")
     assert get_resp.status_code == 200
     assert get_resp.json()["id"] == party_id
 
 
-def test_get_party_returns_same_data(client):
-    create_resp = client.post("/api/v1/parties", json=PARTY_PAYLOAD)
+def test_get_party_returns_same_data(authenticated_client):
+    create_resp = authenticated_client.post("/api/v1/parties", json=PARTY_PAYLOAD)
     created = create_resp.json()
     party_id = created["id"]
 
-    fetched = client.get(f"/api/v1/parties/{party_id}").json()
+    fetched = authenticated_client.get(f"/api/v1/parties/{party_id}").json()
     assert fetched["partyTypeCode"] == created["partyTypeCode"]
     assert fetched["identifiers"][0]["identifierValue"] == "1234-987654321"
     assert fetched["names"][0]["name"] == "Test Café ApS"
 
 
-def test_get_party_not_found(client):
-    response = client.get(f"/api/v1/parties/{uuid.uuid4()}")
+def test_get_party_not_found(authenticated_client):
+    response = authenticated_client.get(f"/api/v1/parties/{uuid.uuid4()}")
     assert response.status_code == 404
     assert response.json()["detail"] == "Party not found"

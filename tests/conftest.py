@@ -1,12 +1,16 @@
 import os
 import re
+import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from dotenv import load_dotenv
 from fastapi.testclient import TestClient
+from jose import jwt
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
+from app.config import settings
 # Load .env so DATABASE_URL is available via os.environ before any app import.
 load_dotenv()
 
@@ -17,6 +21,8 @@ from app.models.base import Base  # noqa: E402
 # Import models so SQLAlchemy registers them with Base.metadata
 import app.models.party  # noqa: F401, E402
 import app.models.party_role  # noqa: F401, E402
+import app.models.user  # noqa: F401, E402
+from app.repositories.user import UserRepository  # noqa: E402
 
 # Derive URLs from the DATABASE_URL env var so no credentials are hardcoded.
 # DATABASE_URL points at the main DB; swap the database name for the test DB.
@@ -77,3 +83,37 @@ def client(db):
             yield c
     finally:
         fastapi_app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.fixture
+def admin_credentials(db):
+    """Create an ADMIN user that can authenticate against protected routes."""
+    email = f"admin-{uuid.uuid4()}@example.com"
+    repo = UserRepository()
+    user = repo.create_user(
+        email=email,
+        hashed_password="not-used-in-these-tests",
+        role="ADMIN",
+        party_id=None,
+        db=db,
+    )
+    return user
+
+
+@pytest.fixture
+def authenticated_client(client, admin_credentials):
+    """Return a logged-in client with auth cookies set."""
+    access_payload = {
+        "sub": str(admin_credentials.id),
+        "role": admin_credentials.role,
+        "token_type": "access",
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=30),
+    }
+    access_token = jwt.encode(
+        access_payload,
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM,
+    )
+    client.cookies.set("access_token", access_token)
+    assert client.cookies.get("access_token")
+    return client
