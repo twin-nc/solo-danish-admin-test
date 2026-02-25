@@ -1,18 +1,28 @@
+import os
+import re
+
 import pytest
+from dotenv import load_dotenv
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
-from app.main import app as fastapi_app
-from app.models.base import Base
+# Load .env so DATABASE_URL is available via os.environ before any app import.
+load_dotenv()
+
+from app.db.session import get_db  # noqa: E402
+from app.main import app as fastapi_app  # noqa: E402
+from app.models.base import Base  # noqa: E402
 
 # Import models so SQLAlchemy registers them with Base.metadata
-import app.models.party  # noqa: F401
-import app.models.party_role  # noqa: F401
+import app.models.party  # noqa: F401, E402
+import app.models.party_role  # noqa: F401, E402
 
-ADMIN_URL = "postgresql://postgres:6XQVgkot7WdaBFle3r6Q@localhost:5432/postgres"
-TEST_DATABASE_URL = "postgresql://postgres:6XQVgkot7WdaBFle3r6Q@localhost:5432/vatri_test_db"
+# Derive URLs from the DATABASE_URL env var so no credentials are hardcoded.
+# DATABASE_URL points at the main DB; swap the database name for the test DB.
+_base_url = os.environ["DATABASE_URL"]
+TEST_DATABASE_URL = re.sub(r"/[^/]+$", "/vatri_test_db", _base_url)
+ADMIN_URL = re.sub(r"/[^/]+$", "/postgres", _base_url)
 
 
 @pytest.fixture(scope="session")
