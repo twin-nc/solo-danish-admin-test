@@ -13,6 +13,7 @@ from app.models.party_role import (
     PartyRoleEligibleIdentifier,
     PartyRoleState,
 )
+from app.models.user import User
 
 __all__ = [
     "Base",
@@ -26,4 +27,5 @@ __all__ = [
     "PartyRoleState",
     "PartyRoleEligibleIdentifier",
     "PartyRoleEligibleContact",
+    "User",
 ]

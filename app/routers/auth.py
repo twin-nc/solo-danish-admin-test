@@ -16,6 +16,24 @@ def get_auth_service() -> AuthService:
     raise NotImplementedError
 
 
+def _set_auth_cookie(
+    response: Response,
+    key: str,
+    value: str,
+    max_age: int,
+) -> None:
+    secure = settings.ENVIRONMENT == "production"
+    response.set_cookie(
+        key=key,
+        value=value,
+        httponly=True,
+        max_age=max_age,
+        samesite="lax",
+        secure=secure,
+        path="/",
+    )
+
+
 @router.post("/login", response_model=TokenResponse)
 async def login(
     payload: LoginRequest,
@@ -25,22 +43,17 @@ async def login(
 ) -> TokenResponse:
     access_token, refresh_token = await service.login(payload.email, payload.password, db)
 
-    secure = settings.ENVIRONMENT == "production"
-    response.set_cookie(
+    _set_auth_cookie(
+        response=response,
         key="access_token",
         value=access_token,
-        httponly=True,
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        samesite="lax",
-        secure=secure,
     )
-    response.set_cookie(
+    _set_auth_cookie(
+        response=response,
         key="refresh_token",
         value=refresh_token,
-        httponly=True,
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
-        samesite="lax",
-        secure=secure,
     )
     return TokenResponse(access_token=access_token)
 
@@ -58,22 +71,32 @@ async def refresh_token(
 
     new_access_token = await service.refresh(token, db)
 
-    secure = settings.ENVIRONMENT == "production"
-    response.set_cookie(
+    _set_auth_cookie(
+        response=response,
         key="access_token",
         value=new_access_token,
-        httponly=True,
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        samesite="lax",
-        secure=secure,
     )
     return TokenResponse(access_token=new_access_token)
 
 
 @router.post("/logout")
 async def logout(response: Response) -> dict:
-    response.set_cookie(key="access_token", value="", max_age=0, httponly=True)
-    response.set_cookie(key="refresh_token", value="", max_age=0, httponly=True)
+    secure = settings.ENVIRONMENT == "production"
+    response.delete_cookie(
+        key="access_token",
+        httponly=True,
+        samesite="lax",
+        secure=secure,
+        path="/",
+    )
+    response.delete_cookie(
+        key="refresh_token",
+        httponly=True,
+        samesite="lax",
+        secure=secure,
+        path="/",
+    )
     return {"message": "Logged out"}
 
 

@@ -18,6 +18,6 @@ class User(Base, TimestampMixin):
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     party_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("parties.id"),
+        ForeignKey("parties.id", ondelete="SET NULL"),
         nullable=True,
     )

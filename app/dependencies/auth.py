@@ -25,7 +25,10 @@ async def get_current_user(
             token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
         )
         user_id_str: str | None = payload.get("sub")
+        token_type: str | None = payload.get("token_type")
         if user_id_str is None:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        if token_type != "access":
             raise HTTPException(status_code=401, detail="Not authenticated")
         user_id = uuid.UUID(user_id_str)
     except (JWTError, ValueError):
