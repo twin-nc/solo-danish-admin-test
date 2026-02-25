@@ -1,9 +1,11 @@
 import uuid
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.dependencies.auth import get_current_user, require_role
+from app.models.user import User
 from app.routers.parties import get_party_service
 from app.schemas.party_role import PartyRoleCreate, PartyRoleRead
 from app.services.party import PartyService
@@ -21,6 +23,7 @@ async def assign_role(
     payload: PartyRoleCreate,
     db: Session = Depends(get_db),
     service: PartyService = Depends(get_party_service),
+    _: User = Depends(require_role("ADMIN", "OFFICER")),
 ) -> PartyRoleRead:
     role = await service.assign_role(party_id, payload, db)
     return PartyRoleRead.from_orm(role)
@@ -31,6 +34,9 @@ async def list_roles(
     party_id: uuid.UUID,
     db: Session = Depends(get_db),
     service: PartyService = Depends(get_party_service),
+    current_user: User = Depends(get_current_user),
 ) -> list[PartyRoleRead]:
+    if current_user.role == "TAXPAYER" and current_user.party_id != party_id:
+        raise HTTPException(status_code=404, detail="Party not found")
     roles = await service.list_roles(party_id, db)
     return [PartyRoleRead.from_orm(r) for r in roles]
