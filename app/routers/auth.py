@@ -41,7 +41,9 @@ async def login(
     db: Session = Depends(get_db),
     service: AuthService = Depends(get_auth_service),
 ) -> TokenResponse:
-    access_token, refresh_token = await service.login(payload.email, payload.password, db)
+    access_token, refresh_token = await service.login(
+        payload.email, payload.password, db
+    )
 
     _set_auth_cookie(
         response=response,

@@ -19,7 +19,9 @@ PARTY_PAYLOAD = {
 def _payload_with(identifier_value: str, email: str, name: str) -> PartyCreate:
     payload = {
         **PARTY_PAYLOAD,
-        "identifiers": [{"identifierTypeCL": "TIN", "identifierValue": identifier_value}],
+        "identifiers": [
+            {"identifierTypeCL": "TIN", "identifierValue": identifier_value}
+        ],
         "contacts": [{"contactValue": email}],
         "names": [{"name": name, "isAlias": False}],
     }

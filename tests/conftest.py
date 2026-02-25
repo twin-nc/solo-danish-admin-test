@@ -11,6 +11,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 from app.config import settings
+
 # Load .env so DATABASE_URL is available via os.environ before any app import.
 load_dotenv()
 

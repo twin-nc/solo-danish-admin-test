@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 # ── Identifiers ──────────────────────────────────────────────────────────────
 
+
 class PartyIdentifierCreate(BaseModel):
     identifierTypeCL: str = Field(..., examples=["TIN"])
     identifierValue: str = Field(..., examples=["1676-123456789"])
@@ -32,6 +33,7 @@ class PartyIdentifierRead(BaseModel):
 
 
 # ── Classifications ───────────────────────────────────────────────────────────
+
 
 class PartyClassificationCreate(BaseModel):
     partyClassificationTypeCL: str = Field(..., examples=["BUSINESS_SIZE"])
@@ -60,6 +62,7 @@ class PartyClassificationRead(BaseModel):
 
 # ── States ────────────────────────────────────────────────────────────────────
 
+
 class PartyStateCreate(BaseModel):
     partyStateCL: str = Field(..., examples=["IN_BUSINESS"])
 
@@ -84,6 +87,7 @@ class PartyStateRead(BaseModel):
 
 # ── Contacts ──────────────────────────────────────────────────────────────────
 
+
 class PartyContactCreate(BaseModel):
     contactValue: str = Field(..., examples=["info@company.dk"])
 
@@ -107,6 +111,7 @@ class PartyContactRead(BaseModel):
 
 
 # ── Names ─────────────────────────────────────────────────────────────────────
+
 
 class PartyNameCreate(BaseModel):
     name: str = Field(..., examples=["Acme ApS"])
@@ -134,6 +139,7 @@ class PartyNameRead(BaseModel):
 
 
 # ── Party ─────────────────────────────────────────────────────────────────────
+
 
 class PartyCreate(BaseModel):
     partyTypeCode: str = Field(default="ORGADM1", examples=["ORGADM1"])

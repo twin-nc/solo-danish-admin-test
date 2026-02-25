@@ -48,7 +48,9 @@ def _build_role():
     return SimpleNamespace(id=uuid.uuid4(), party_role_type_code="BUSINSSDM1")
 
 
-def _build_role_payload(identifier_id: uuid.UUID, contact_id: uuid.UUID) -> PartyRoleCreate:
+def _build_role_payload(
+    identifier_id: uuid.UUID, contact_id: uuid.UUID
+) -> PartyRoleCreate:
     return PartyRoleCreate(
         party_role_type_code="BUSINSSDM1",
         states=[{"partyRoleStateCL": "ACTIVE"}],

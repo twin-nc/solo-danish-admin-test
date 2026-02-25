@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 # ── Role Eligible Identifier ──────────────────────────────────────────────────
 
+
 class EligibleIdentifierCreate(BaseModel):
     party_identifier_id: uuid.UUID
     primary: bool = False
@@ -30,6 +31,7 @@ class EligibleIdentifierRead(BaseModel):
 
 
 # ── Role Eligible Contact ─────────────────────────────────────────────────────
+
 
 class EligibleContactCreate(BaseModel):
     party_contact_id: uuid.UUID
@@ -56,6 +58,7 @@ class EligibleContactRead(BaseModel):
 
 # ── Role State ────────────────────────────────────────────────────────────────
 
+
 class RoleStateCreate(BaseModel):
     partyRoleStateCL: str = Field(..., examples=["ACTIVE"])
 
@@ -77,6 +80,7 @@ class RoleStateRead(BaseModel):
 
 
 # ── Party Role ────────────────────────────────────────────────────────────────
+
 
 class PartyRoleCreate(BaseModel):
     party_role_type_code: str = Field(default="BUSINSSDM1", examples=["BUSINSSDM1"])

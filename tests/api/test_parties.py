@@ -5,7 +5,10 @@ PARTY_PAYLOAD = {
     "identifiers": [{"identifierTypeCL": "TIN", "identifierValue": "1234-987654321"}],
     "classifications": [
         {"partyClassificationTypeCL": "BUSINESS_SIZE", "classificationValue": "MEDIUM"},
-        {"partyClassificationTypeCL": "ECONOMIC_ACTIVITIES", "classificationValue": "CAFE"},
+        {
+            "partyClassificationTypeCL": "ECONOMIC_ACTIVITIES",
+            "classificationValue": "CAFE",
+        },
     ],
     "states": [{"partyStateCL": "IN_BUSINESS"}],
     "contacts": [{"contactValue": "test@virksomhed.dk"}],

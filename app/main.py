@@ -61,6 +61,7 @@ app.include_router(auth_router)
 
 # ── Health check ──────────────────────────────────────────────────────────────
 
+
 @app.get("/health", tags=["health"])
 def health() -> dict:
     return {"status": "ok"}

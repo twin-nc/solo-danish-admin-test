@@ -21,7 +21,11 @@ class PartyService:
         party = self._repo.create_party(payload, db)
 
         tin = next(
-            (i.identifier_value for i in party.identifiers if i.identifier_type_cl == "TIN"),
+            (
+                i.identifier_value
+                for i in party.identifiers
+                if i.identifier_type_cl == "TIN"
+            ),
             None,
         )
         await self._bus.publish(

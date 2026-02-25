@@ -1,7 +1,10 @@
 import uuid
 
 from app.events.party_events import PartyRegistered, PartyRoleAssigned
-from app.events.handlers.party_handlers import on_party_registered, on_party_role_assigned
+from app.events.handlers.party_handlers import (
+    on_party_registered,
+    on_party_role_assigned,
+)
 
 
 def test_on_party_registered_does_not_raise(caplog):

@@ -89,7 +89,9 @@ def test_list_roles(authenticated_client, registered_party):
 
 
 def test_list_roles_empty(authenticated_client, registered_party):
-    response = authenticated_client.get(f"/api/v1/parties/{registered_party['id']}/roles")
+    response = authenticated_client.get(
+        f"/api/v1/parties/{registered_party['id']}/roles"
+    )
     assert response.status_code == 200
     assert response.json() == []
 
@@ -107,7 +109,9 @@ def test_assign_role_party_not_found(authenticated_client):
         "eligible_identifiers": [],
         "eligible_contacts": [],
     }
-    response = authenticated_client.post(f"/api/v1/parties/{uuid.uuid4()}/roles", json=payload)
+    response = authenticated_client.post(
+        f"/api/v1/parties/{uuid.uuid4()}/roles", json=payload
+    )
     assert response.status_code == 404
     assert response.json()["detail"] == "Party not found"
 
@@ -115,7 +119,9 @@ def test_assign_role_party_not_found(authenticated_client):
 def test_assign_role_invalid_identifier(authenticated_client, registered_party):
     payload = _role_payload(
         registered_party,
-        eligible_identifiers=[{"party_identifier_id": str(uuid.uuid4()), "primary": True}],
+        eligible_identifiers=[
+            {"party_identifier_id": str(uuid.uuid4()), "primary": True}
+        ],
     )
     response = authenticated_client.post(
         f"/api/v1/parties/{registered_party['id']}/roles", json=payload
