@@ -46,7 +46,10 @@ async function request<T>(
       return request<T>(path, options, false);
     }
     if (typeof window !== 'undefined') {
-      window.location.href = '/login';
+      // Avoid a hard-refresh loop when already on the login page.
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login';
+      }
     }
     throw new ApiError(401, 'Session expired');
   }
