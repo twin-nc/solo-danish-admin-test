@@ -84,6 +84,20 @@ class PartyRepository:
             .first()
         )
 
+    def list_parties(self, db: Session) -> list[Party]:
+        return (
+            db.query(Party)
+            .options(
+                selectinload(Party.identifiers),
+                selectinload(Party.classifications),
+                selectinload(Party.states),
+                selectinload(Party.contacts),
+                selectinload(Party.names),
+            )
+            .order_by(Party.created_at.desc())
+            .all()
+        )
+
     # ── Identifiers / Contacts (for ownership validation) ─────────────────────
 
     def get_identifier(

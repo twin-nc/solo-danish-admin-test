@@ -27,9 +27,40 @@ def test_register_party_requires_auth(client):
     assert response.status_code == 401
 
 
+def test_list_parties_requires_auth(client):
+    response = client.get("/api/v1/parties")
+    assert response.status_code == 401
+
+
 def test_register_party_returns_201(authenticated_client):
     response = authenticated_client.post("/api/v1/parties", json=PARTY_PAYLOAD)
     assert response.status_code == 201
+
+
+def test_list_parties_returns_records(authenticated_client):
+    payload_1 = dict(PARTY_PAYLOAD)
+    payload_1["identifiers"] = [
+        {"identifierTypeCL": "TIN", "identifierValue": "1234-987654321"}
+    ]
+    payload_1["names"] = [{"name": "Party One ApS", "isAlias": False}]
+
+    payload_2 = dict(PARTY_PAYLOAD)
+    payload_2["identifiers"] = [
+        {"identifierTypeCL": "TIN", "identifierValue": "1234-987654322"}
+    ]
+    payload_2["names"] = [{"name": "Party Two ApS", "isAlias": False}]
+
+    create_1 = authenticated_client.post("/api/v1/parties", json=payload_1)
+    create_2 = authenticated_client.post("/api/v1/parties", json=payload_2)
+    assert create_1.status_code == 201
+    assert create_2.status_code == 201
+
+    response = authenticated_client.get("/api/v1/parties")
+    assert response.status_code == 200
+    data = response.json()
+    ids = {item["id"] for item in data}
+    assert create_1.json()["id"] in ids
+    assert create_2.json()["id"] in ids
 
 
 def test_register_party_response_shape(authenticated_client):

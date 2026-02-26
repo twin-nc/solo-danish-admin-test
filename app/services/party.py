@@ -43,6 +43,9 @@ class PartyService:
             raise HTTPException(status_code=404, detail="Party not found")
         return party
 
+    async def list_parties(self, db: Session) -> list[Party]:
+        return self._repo.list_parties(db)
+
     async def assign_role(
         self, party_id: uuid.UUID, payload: PartyRoleCreate, db: Session
     ) -> PartyRole:

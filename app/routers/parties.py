@@ -28,6 +28,16 @@ async def register_party(
     return PartyRead.from_orm(party)
 
 
+@router.get("", response_model=list[PartyRead])
+async def list_parties(
+    db: Session = Depends(get_db),
+    service: PartyService = Depends(get_party_service),
+    _: User = Depends(require_role("ADMIN", "OFFICER")),
+) -> list[PartyRead]:
+    parties = await service.list_parties(db)
+    return [PartyRead.from_orm(p) for p in parties]
+
+
 @router.get("/{party_id}", response_model=PartyRead)
 async def get_party(
     party_id: uuid.UUID,
